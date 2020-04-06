@@ -6,21 +6,21 @@ use futures::{stream, FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use log::{debug, error, info, warn};
 use snafu::{
     futures::try_future::TryFutureExt as SnafuTFE, futures::try_stream::TryStreamExt as SnafuTSE,
-    ResultExt,
+    NoneError, ResultExt,
 };
+use std::env;
 use std::path::PathBuf;
+use tokio::net::TcpStream;
 use tokio::sync::mpsc;
+use tokio_postgres::tls::{NoTls, NoTlsStream};
+use tokio_postgres::{
+    config::Host, AsyncMessage, Client, Config, Connection, IsolationLevel, SimpleQueryMessage,
+};
 use uuid::Uuid;
 use warp::{
     self,
     filters::sse::{self, ServerSentEvent},
     Filter,
-};
-
-use tokio::net::TcpStream;
-use tokio_postgres::tls::{NoTls, NoTlsStream};
-use tokio_postgres::{
-    AsyncMessage, Client, Config, Connection, Error, IsolationLevel, SimpleQueryMessage,
 };
 
 mod error;
@@ -57,15 +57,42 @@ async fn main() -> Result<()> {
 
     pretty_env_logger::init();
 
+    // Read the file ./postgres/database.env to extract user, password, and database name
+    let dbenv = env::current_dir()
+        .and_then(|d| Ok(d.join("sql").join("database.env")))
+        .context(error::IOError)?;
+    dotenv::from_path(dbenv.as_path())
+        .or(Err(NoneError))
+        .context(error::EnvError {
+            details: String::from("database env"),
+        })?;
+
+    // Build the connection string
+    let connstr = format!(
+        "postgresql://{user}:{pwd}@localhost/{db}",
+        user = dotenv::var("POSTGRES_USER")
+            .or(Err(NoneError))
+            .context(error::EnvError {
+                details: String::from("POSTGRES_USER")
+            })?,
+        pwd = dotenv::var("POSTGRES_PASSWORD")
+            .or(Err(NoneError))
+            .context(error::EnvError {
+                details: String::from("POSTGRES_PASSWORD")
+            })?,
+        db = dotenv::var("POSTGRES_DB")
+            .or(Err(NoneError))
+            .context(error::EnvError {
+                details: String::from("POSTGRES_DB")
+            })?,
+    );
+
     // FIXME 1024 ??
     let (mut tx1, mut rx1) = mpsc::channel(1024);
 
     // FIXME Hardcoded ??
-    let pg_mgr = PostgresConnectionManager::new_from_stringlike(
-        "postgresql://journaladmin:secret@postgres:5432/journal",
-        tokio_postgres::NoTls,
-    )
-    .context(error::DBConnError)?;
+    let pg_mgr = PostgresConnectionManager::new_from_stringlike(&connstr, tokio_postgres::NoTls)
+        .context(error::DBConnError)?;
 
     let pool = Pool::builder()
         .build(pg_mgr)
@@ -78,7 +105,7 @@ async fn main() -> Result<()> {
             debug!("Received payload");
             match payload {
                 Payload::Doc(doc) => {
-                    insert_doc(doc, pool.clone())
+                    doc2db(pool.clone(), doc)
                         .map_ok_or_else(
                             |err| error!("insert error: {}", err),
                             |id| info!("id: {}", id),
@@ -132,8 +159,16 @@ async fn main() -> Result<()> {
     });
 
     let feed = warp::path("feed").and(warp::get()).map(|| {
-        //let mut rt = tokio::runtime::Runtime::new().unwrap();
-        let stream = block_on(async { get_stream().await.expect("Cannot get LISTEN stream") });
+        let (client, connection) = block_on(async {
+            connect_raw("postgresql://journaladmin:secret@postgres/journal")
+                .await
+                .expect("DB Listen Connection")
+        });
+        let stream = block_on(async {
+            get_stream(&client, connection)
+                .await
+                .expect("Cannot get LISTEN stream")
+        });
         sse::reply(sse::keep_alive().stream(stream))
     });
 
@@ -144,15 +179,13 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn get_stream() -> Result<
+async fn get_stream(
+    client: &Client,
+    mut connection: Connection<TcpStream, NoTlsStream>,
+) -> Result<
     impl Stream<Item = Result<impl ServerSentEvent + Send + 'static, warp::Error>> + Send + 'static,
     error::Error,
 > {
-    let (client, mut connection) =
-        connect_raw("postgresql://journaladmin:secret@postgres:5432/journal")
-            .await
-            .context(error::DBError)?;
-
     let (tx, rx) = futures::channel::mpsc::unbounded();
     let stream = stream::poll_fn(move |cx| connection.poll_message(cx)).map_err(|e| panic!(e));
     let connection = stream.forward(tx).map(|r| r.expect("stream forward"));
@@ -184,20 +217,13 @@ async fn get_stream() -> Result<
     }))
 }
 
-fn insert_doc(
-    doc: model::Doc,
-    pool: Pool<PostgresConnectionManager<tokio_postgres::NoTls>>,
-) -> impl future::TryFuture<Ok = String, Error = error::Error> + 'static {
-    select(pool, doc)
-}
-
-async fn select(
+async fn doc2db(
     pool: Pool<PostgresConnectionManager<tokio_postgres::NoTls>>,
     doc: model::Doc,
 ) -> Result<String, error::Error> {
     let connection = pool.get().await.context(error::DBPoolError)?;
 
-    let stmt = connection.prepare("SELECT * FROM doc.create_document_with_id($1::UUID, $2::TEXT, $3::TEXT, $4::TEXT, $5::TEXT, $6::TEXT[], $7::TEXT, $8::DOC.DOC_KIND, $9::DOC.DOC_GENRE)").await.context(error::DBError)?;
+    let stmt = connection.prepare("SELECT * FROM create_document_with_id($1::UUID, $2::TEXT, $3::TEXT, $4::TEXT, $5::TEXT, $6::TEXT[], $7::TEXT, $8::DOC.DOC_KIND, $9::DOC.DOC_GENRE)").await.context(error::DBError)?;
 
     let row = connection
         .query_one(
@@ -220,10 +246,39 @@ async fn select(
     Ok(format!("{}", row.get::<usize, Uuid>(0)))
 }
 
-async fn connect_raw(s: &str) -> Result<(Client, Connection<TcpStream, NoTlsStream>), Error> {
-    let socket = TcpStream::connect("10.0.3.14:5432")
+async fn connect_raw(
+    s: &str,
+) -> Result<(Client, Connection<TcpStream, NoTlsStream>), error::Error> {
+    let config = s.parse::<Config>().context(error::DBError)?;
+    // Here we extract the host and port from the connection string.
+    // Note that the port may not necessarily be explicitely specified,
+    // the port 5432 is used by default.
+    let host = config
+        .get_hosts()
+        .first()
+        .ok_or(error::UserError {
+            details: String::from("Missing host"),
+        })
+        .and_then(|h| match h {
+            Host::Tcp(remote) => Ok(remote),
+            Host::Unix(_) => Err(error::UserError {
+                details: String::from("No local socket"),
+            }),
+        })
+        .expect("host");
+    let port = config
+        .get_ports()
+        .first()
+        .ok_or(error::UserError {
+            details: String::from("Missing port"),
+        })
+        .expect("port");
+
+    let conn = format!("{}:{}", host, port);
+    println!("Connecting to {}", conn);
+    let socket = TcpStream::connect(conn).await.context(error::IOError)?;
+    config
+        .connect_raw(socket, NoTls)
         .await
-        .expect("socket connection");
-    let config = s.parse::<Config>().expect("config");
-    config.connect_raw(socket, NoTls).await
+        .context(error::DBError)
 }

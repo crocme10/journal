@@ -7,10 +7,11 @@ use tokio::sync::mpsc::error::SendError;
 pub enum Error {
     #[snafu(display("User Error: {}", details))]
     #[snafu(visibility(pub))]
-    UserError {
-        details: String,
-        // backtrace: Backtrace,
-    },
+    UserError { details: String },
+
+    #[snafu(display("Env Error: {}", details))]
+    #[snafu(visibility(pub))]
+    EnvError { details: String },
 
     #[snafu(display("IO Error: {}", source))]
     #[snafu(visibility(pub))]
