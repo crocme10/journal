@@ -7,11 +7,14 @@ use snafu::{
     futures::try_future::TryFutureExt as SnafuTFE, futures::try_stream::TryStreamExt as SnafuTSE,
     NoneError, ResultExt,
 };
+use std::convert::Infallible;
 use std::env;
 use std::path::PathBuf;
+use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
+use tokio::time::interval;
 use tokio_postgres::tls::{NoTls, NoTlsStream};
 use tokio_postgres::{
     config::Host, AsyncMessage, Client, Config, Connection, IsolationLevel, SimpleQueryMessage,
@@ -20,7 +23,7 @@ use uuid::Uuid;
 use warp::{
     self,
     filters::sse::{self, ServerSentEvent},
-    Filter,
+    Filter, Reply,
 };
 
 mod error;
@@ -158,26 +161,28 @@ async fn main() -> Result<()> {
         info!("Terminating Watcher");
     });
 
-    let feed = warp::path("feed").and(warp::get()).map(|| {
-        let mut rt = Runtime::new().unwrap();
-        let (client, connection) = rt.block_on(async {
-            connect_raw("postgresql://journaladmin:secret@postgres/journal")
-                .await
-                .expect("DB Listen Connection")
-        });
-        let stream = rt.block_on(async {
-            get_stream(&client, connection)
-                .await
-                .expect("Cannot get LISTEN stream")
-        });
-        sse::reply(sse::keep_alive().stream(stream))
-    });
-
+    let feed = warp::path("feed").and(warp::get()).and_then(|| get_some());
     let index = warp::fs::file("dist/index.html");
     let dir = warp::fs::dir("dist");
     let routes = feed.or(index).or(dir);
     warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
     Ok(())
+}
+
+async fn get_some() -> Result<impl Reply, Infallible> {
+    let (client, connection) = connect_raw("postgresql://journaladmin:secret@postgres/journal")
+        .await
+        .expect("DB Listen Connection");
+    let stream = get_stream(&client, connection)
+        .await
+        .expect("Cannot get LISTEN stream");
+    Ok(sse::reply(sse::keep_alive().stream(stream)))
+    //let mut counter: u64 = 0;
+    //let stream = interval(Duration::from_secs(1)).map(move |_| {
+    //    counter += 1;
+    //    sse_counter(counter)
+    //});
+    //Ok(sse::reply(sse::keep_alive().stream(stream)))
 }
 
 async fn get_stream(
@@ -194,8 +199,7 @@ async fn get_stream(
     debug!("Spawned dedicated connection for postgres notifications");
 
     client
-        //.execute("LISTEN documents", &[])
-        .query_one("LISTEN documents;", &[])
+        .execute("LISTEN documents;", &[])
         .await
         .context(error::DBError)?;
 
@@ -282,4 +286,8 @@ async fn connect_raw(
         .connect_raw(socket, NoTls)
         .await
         .context(error::DBError)
+}
+
+fn sse_counter(counter: u64) -> Result<impl ServerSentEvent, Infallible> {
+    Ok(warp::sse::data(counter))
 }
