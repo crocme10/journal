@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, ToSql, PartialEq, Serialize, Deserialize)]
-#[postgres(name = "doc_kind")]
+#[postgres(name = "kind")]
 pub enum DocKind {
     #[postgres(name = "doc")]
     Doc,
@@ -12,7 +12,7 @@ pub enum DocKind {
 }
 
 #[derive(Debug, ToSql, PartialEq, Serialize, Deserialize)]
-#[postgres(name = "doc_genre")]
+#[postgres(name = "genre")]
 pub enum DocGenre {
     #[postgres(name = "tutorial")]
     Tutorial,

@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
 
     // Build the connection string
     let connstr = format!(
-        "postgresql://{user}:{pwd}@localhost/{db}",
+        "postgresql://{user}:{pwd}@postgres/{db}",
         user = dotenv::var("POSTGRES_USER")
             .or(Err(NoneError))
             .context(error::EnvError {
@@ -157,48 +157,44 @@ async fn main() -> Result<()> {
     });
 
     let feed = warp::path("feed").and(warp::get()).and_then(|| async move {
-        let (client, mut connection) =
-            connect_raw("postgresql://journaladmin:secret@postgres/journal")
+        let (mut tx, mut rx) = mpsc::channel(1024);
+        tokio::spawn(async move {
+            let (client, mut connection) =
+                connect_raw("postgresql://journaladmin:secret@postgres/journal")
+                    .await
+                    .unwrap();
+
+            let mut stream =
+                stream::poll_fn(move |cx| connection.poll_message(cx)).map_err(|e| panic!(e));
+            //let connection = stream.forward(tx).map(|r| r.expect("stream forward"));
+            client
+                .execute("LISTEN documents;", &[])
                 .await
+                .context(error::DBError)
                 .unwrap();
 
-        //let (mut tx, mut rx) = mpsc::channel(1024);
-        let mut stream = stream::poll_fn(move |cx| connection.poll_message(cx))
-            .map_err(|e| panic!(e))
-            .filter_map(|m| match m {
-                Ok(m) => match m {
-                    AsyncMessage::Notification(n) => {
-                        debug!("Received notification on channel: {}", n.channel());
-                        future::ready(Some(Ok((
-                            sse::event(String::from(n.channel())),
-                            sse::data(String::from(n.payload())),
-                        ))))
+            // drop(client);
+
+            while let Some(item) = stream.next().await {
+                let n = item.unwrap();
+                match n {
+                    AsyncMessage::Notification(notif) => {
+                        debug!("Sending {:?} to tx", notif.payload());
+                        tx.send(AsyncMessage::Notification(notif)).await;
+                    }
+                    AsyncMessage::Notice(err) => {
+                        debug!("Not Sending {:?} to tx", err);
                     }
                     _ => {
-                        debug!("Received something on channel.");
-                        future::ready(None)
+                        debug!("Not Sending ??? to tx");
                     }
-                },
-                Err(err) => future::ready(None),
-            });
-        tokio::spawn(connection);
-        //let connection = stream.forward(tx).map(|r| r.expect("stream forward"));
-        //tokio::spawn(async move {
-        //    while let Some(item) = stream.next().await {
-        //        tx.send(item.unwrap()).await;
-        //    }
-        //});
+                }
+            }
+        });
+
         debug!("Spawned dedicated connection for postgres notifications");
 
-        client
-            .execute("LISTEN documents;", &[])
-            .await
-            .context(error::DBError)
-            .unwrap();
-
-        drop(client);
-
-        // let stream = make_stream(rx).unwrap();
+        let stream = make_stream(rx).unwrap();
 
         // let mut counter: u64 = 0;
         // let stream = interval(Duration::from_secs(1)).map(move |_| {
@@ -247,7 +243,7 @@ async fn doc2db(
 ) -> Result<String, error::Error> {
     let connection = pool.get().await.context(error::DBPoolError)?;
 
-    let stmt = connection.prepare("SELECT * FROM create_document_with_id($1::UUID, $2::TEXT, $3::TEXT, $4::TEXT, $5::TEXT, $6::TEXT[], $7::TEXT, $8::DOC.DOC_KIND, $9::DOC.DOC_GENRE)").await.context(error::DBError)?;
+    let stmt = connection.prepare("SELECT * FROM create_document_with_id($1::UUID, $2::TEXT, $3::TEXT, $4::TEXT, $5::TEXT, $6::TEXT[], $7::TEXT, $8::KIND, $9::GENRE)").await.context(error::DBError)?;
 
     let row = connection
         .query_one(
