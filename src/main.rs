@@ -157,50 +157,29 @@ async fn main() -> Result<()> {
     });
 
     let feed = warp::path("feed").and(warp::get()).and_then(|| async move {
-        let (mut tx, mut rx) = mpsc::channel(1024);
-        tokio::spawn(async move {
-            let (client, mut connection) =
-                connect_raw("postgresql://journaladmin:secret@postgres/journal")
-                    .await
-                    .unwrap();
+        let (tx, rx) = futures::channel::mpsc::unbounded();
 
-            let mut stream =
-                stream::poll_fn(move |cx| connection.poll_message(cx)).map_err(|e| panic!(e));
-            //let connection = stream.forward(tx).map(|r| r.expect("stream forward"));
-            client
-                .execute("LISTEN documents;", &[])
+        let (client, mut connection) =
+            connect_raw("postgresql://journaladmin:secret@postgres/journal")
                 .await
-                .context(error::DBError)
                 .unwrap();
 
-            // drop(client);
+        let mut stream =
+            stream::poll_fn(move |cx| connection.poll_message(cx)).map_err(|e| panic!(e));
 
-            while let Some(item) = stream.next().await {
-                let n = item.unwrap();
-                match n {
-                    AsyncMessage::Notification(notif) => {
-                        debug!("Sending {:?} to tx", notif.payload());
-                        tx.send(AsyncMessage::Notification(notif)).await;
-                    }
-                    AsyncMessage::Notice(err) => {
-                        debug!("Not Sending {:?} to tx", err);
-                    }
-                    _ => {
-                        debug!("Not Sending ??? to tx");
-                    }
-                }
-            }
-        });
+        let connection = stream.forward(tx).map(|r| r.expect("stream forward"));
+
+        tokio::spawn(connection);
+
+        client
+            .execute("LISTEN documents;", &[])
+            .await
+            .context(error::DBError)
+            .unwrap();
 
         debug!("Spawned dedicated connection for postgres notifications");
 
         let stream = make_stream(rx).unwrap();
-
-        // let mut counter: u64 = 0;
-        // let stream = interval(Duration::from_secs(1)).map(move |_| {
-        //     counter += 1;
-        //     sse_counter(counter)
-        // });
 
         make_infallible(sse::reply(sse::keep_alive().stream(stream)))
     });
@@ -213,7 +192,7 @@ async fn main() -> Result<()> {
 }
 
 fn make_stream(
-    rx: mpsc::Receiver<AsyncMessage>,
+    rx: futures::channel::mpsc::UnboundedReceiver<AsyncMessage>,
 ) -> Result<
     impl Stream<Item = Result<impl ServerSentEvent + Send + 'static, Infallible>> + Send + 'static,
     Infallible,
