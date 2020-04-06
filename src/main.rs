@@ -3,27 +3,21 @@ use clap::{App, Arg};
 use futures::future;
 use futures::{stream, FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use log::{debug, error, info, warn};
-use snafu::{
-    futures::try_future::TryFutureExt as SnafuTFE, futures::try_stream::TryStreamExt as SnafuTSE,
-    NoneError, ResultExt,
-};
+use snafu::{NoneError, ResultExt};
 use std::convert::Infallible;
 use std::env;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::net::TcpStream;
-use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 use tokio::time::interval;
 use tokio_postgres::tls::{NoTls, NoTlsStream};
-use tokio_postgres::{
-    config::Host, AsyncMessage, Client, Config, Connection, IsolationLevel, SimpleQueryMessage,
-};
+use tokio_postgres::{config::Host, AsyncMessage, Client, Config, Connection};
 use uuid::Uuid;
 use warp::{
     self,
     filters::sse::{self, ServerSentEvent},
-    Filter, Reply,
+    Filter,
 };
 
 mod error;
@@ -168,10 +162,32 @@ async fn main() -> Result<()> {
                 .await
                 .unwrap();
 
-        let (tx, rx) = futures::channel::mpsc::unbounded();
-        let stream = stream::poll_fn(move |cx| connection.poll_message(cx)).map_err(|e| panic!(e));
-        let connection = stream.forward(tx).map(|r| r.expect("stream forward"));
+        //let (mut tx, mut rx) = mpsc::channel(1024);
+        let mut stream = stream::poll_fn(move |cx| connection.poll_message(cx))
+            .map_err(|e| panic!(e))
+            .filter_map(|m| match m {
+                Ok(m) => match m {
+                    AsyncMessage::Notification(n) => {
+                        debug!("Received notification on channel: {}", n.channel());
+                        future::ready(Some(Ok((
+                            sse::event(String::from(n.channel())),
+                            sse::data(String::from(n.payload())),
+                        ))))
+                    }
+                    _ => {
+                        debug!("Received something on channel.");
+                        future::ready(None)
+                    }
+                },
+                Err(err) => future::ready(None),
+            });
         tokio::spawn(connection);
+        //let connection = stream.forward(tx).map(|r| r.expect("stream forward"));
+        //tokio::spawn(async move {
+        //    while let Some(item) = stream.next().await {
+        //        tx.send(item.unwrap()).await;
+        //    }
+        //});
         debug!("Spawned dedicated connection for postgres notifications");
 
         client
@@ -182,7 +198,13 @@ async fn main() -> Result<()> {
 
         drop(client);
 
-        let stream = make_stream(rx).unwrap();
+        // let stream = make_stream(rx).unwrap();
+
+        // let mut counter: u64 = 0;
+        // let stream = interval(Duration::from_secs(1)).map(move |_| {
+        //     counter += 1;
+        //     sse_counter(counter)
+        // });
 
         make_infallible(sse::reply(sse::keep_alive().stream(stream)))
     });
@@ -195,7 +217,7 @@ async fn main() -> Result<()> {
 }
 
 fn make_stream(
-    rx: futures::channel::mpsc::UnboundedReceiver<AsyncMessage>,
+    rx: mpsc::Receiver<AsyncMessage>,
 ) -> Result<
     impl Stream<Item = Result<impl ServerSentEvent + Send + 'static, Infallible>> + Send + 'static,
     Infallible,
@@ -218,43 +240,6 @@ fn make_stream(
 fn make_infallible<T>(t: T) -> Result<T, Infallible> {
     Ok(t)
 }
-
-// async fn get_stream(
-//     client: &Client,
-//     mut connection: Connection<TcpStream, NoTlsStream>,
-// ) -> Result<
-//     impl Stream<Item = Result<impl ServerSentEvent + Send + 'static, Infallible>> + Send + 'static,
-//     error::Error,
-// > {
-//     let (tx, rx) = futures::channel::mpsc::unbounded();
-//     let stream = stream::poll_fn(move |cx| connection.poll_message(cx)).map_err(|e| panic!(e));
-//     let connection = stream.forward(tx).map(|r| r.expect("stream forward"));
-//     tokio::spawn(connection);
-//     debug!("Spawned dedicated connection for postgres notifications");
-//
-//     client
-//         .execute("LISTEN documents;", &[])
-//         .await
-//         .context(error::DBError)?;
-//
-//     debug!("Connection is closed: {:?}", client.is_closed());
-//
-//     //drop(client);
-//
-//     Ok(rx.filter_map(|m| match m {
-//         AsyncMessage::Notification(n) => {
-//             debug!("Received notification on channel: {}", n.channel());
-//             future::ready(Some(Ok((
-//                 sse::event(String::from(n.channel())),
-//                 sse::data(String::from(n.payload())),
-//             ))))
-//         }
-//         _ => {
-//             debug!("Received something on channel.");
-//             future::ready(None)
-//         }
-//     }))
-// }
 
 async fn doc2db(
     pool: Pool<PostgresConnectionManager<tokio_postgres::NoTls>>,
