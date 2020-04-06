@@ -1,6 +1,5 @@
 use bb8_postgres::{bb8::Pool, PostgresConnectionManager};
 use clap::{App, Arg};
-use futures::executor::block_on;
 use futures::future;
 use futures::{stream, FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use log::{debug, error, info, warn};
@@ -11,6 +10,7 @@ use snafu::{
 use std::env;
 use std::path::PathBuf;
 use tokio::net::TcpStream;
+use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 use tokio_postgres::tls::{NoTls, NoTlsStream};
 use tokio_postgres::{
@@ -159,12 +159,13 @@ async fn main() -> Result<()> {
     });
 
     let feed = warp::path("feed").and(warp::get()).map(|| {
-        let (client, connection) = block_on(async {
+        let mut rt = Runtime::new().unwrap();
+        let (client, connection) = rt.block_on(async {
             connect_raw("postgresql://journaladmin:secret@postgres/journal")
                 .await
                 .expect("DB Listen Connection")
         });
-        let stream = block_on(async {
+        let stream = rt.block_on(async {
             get_stream(&client, connection)
                 .await
                 .expect("Cannot get LISTEN stream")
