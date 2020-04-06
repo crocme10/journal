@@ -90,10 +90,11 @@ async fn main() -> Result<()> {
             })?,
     );
 
+    debug!("DB Connection String: {}", connstr);
+
     // FIXME 1024 ??
     let (mut tx1, mut rx1) = mpsc::channel(1024);
 
-    // FIXME Hardcoded ??
     let pg_mgr = PostgresConnectionManager::new_from_stringlike(&connstr, tokio_postgres::NoTls)
         .context(error::DBConnError)?;
 
@@ -161,7 +162,31 @@ async fn main() -> Result<()> {
         info!("Terminating Watcher");
     });
 
-    let feed = warp::path("feed").and(warp::get()).and_then(|| get_some());
+    let feed = warp::path("feed").and(warp::get()).and_then(|| async move {
+        let (client, mut connection) =
+            connect_raw("postgresql://journaladmin:secret@postgres/journal")
+                .await
+                .unwrap();
+
+        let (tx, rx) = futures::channel::mpsc::unbounded();
+        let stream = stream::poll_fn(move |cx| connection.poll_message(cx)).map_err(|e| panic!(e));
+        let connection = stream.forward(tx).map(|r| r.expect("stream forward"));
+        tokio::spawn(connection);
+        debug!("Spawned dedicated connection for postgres notifications");
+
+        client
+            .execute("LISTEN documents;", &[])
+            .await
+            .context(error::DBError)
+            .unwrap();
+
+        drop(client);
+
+        let stream = make_stream(rx).unwrap();
+
+        make_infallible(sse::reply(sse::keep_alive().stream(stream)))
+    });
+
     let index = warp::fs::file("dist/index.html");
     let dir = warp::fs::dir("dist");
     let routes = feed.or(index).or(dir);
@@ -169,44 +194,12 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn get_some() -> Result<impl Reply, Infallible> {
-    let (client, connection) = connect_raw("postgresql://journaladmin:secret@postgres/journal")
-        .await
-        .expect("DB Listen Connection");
-    let stream = get_stream(&client, connection)
-        .await
-        .expect("Cannot get LISTEN stream");
-    Ok(sse::reply(sse::keep_alive().stream(stream)))
-    //let mut counter: u64 = 0;
-    //let stream = interval(Duration::from_secs(1)).map(move |_| {
-    //    counter += 1;
-    //    sse_counter(counter)
-    //});
-    //Ok(sse::reply(sse::keep_alive().stream(stream)))
-}
-
-async fn get_stream(
-    client: &Client,
-    mut connection: Connection<TcpStream, NoTlsStream>,
+fn make_stream(
+    rx: futures::channel::mpsc::UnboundedReceiver<AsyncMessage>,
 ) -> Result<
-    impl Stream<Item = Result<impl ServerSentEvent + Send + 'static, warp::Error>> + Send + 'static,
-    error::Error,
+    impl Stream<Item = Result<impl ServerSentEvent + Send + 'static, Infallible>> + Send + 'static,
+    Infallible,
 > {
-    let (tx, rx) = futures::channel::mpsc::unbounded();
-    let stream = stream::poll_fn(move |cx| connection.poll_message(cx)).map_err(|e| panic!(e));
-    let connection = stream.forward(tx).map(|r| r.expect("stream forward"));
-    tokio::spawn(connection);
-    debug!("Spawned dedicated connection for postgres notifications");
-
-    client
-        .execute("LISTEN documents;", &[])
-        .await
-        .context(error::DBError)?;
-
-    debug!("Connection is closed: {:?}", client.is_closed());
-
-    drop(client);
-
     Ok(rx.filter_map(|m| match m {
         AsyncMessage::Notification(n) => {
             debug!("Received notification on channel: {}", n.channel());
@@ -221,6 +214,47 @@ async fn get_stream(
         }
     }))
 }
+
+fn make_infallible<T>(t: T) -> Result<T, Infallible> {
+    Ok(t)
+}
+
+// async fn get_stream(
+//     client: &Client,
+//     mut connection: Connection<TcpStream, NoTlsStream>,
+// ) -> Result<
+//     impl Stream<Item = Result<impl ServerSentEvent + Send + 'static, Infallible>> + Send + 'static,
+//     error::Error,
+// > {
+//     let (tx, rx) = futures::channel::mpsc::unbounded();
+//     let stream = stream::poll_fn(move |cx| connection.poll_message(cx)).map_err(|e| panic!(e));
+//     let connection = stream.forward(tx).map(|r| r.expect("stream forward"));
+//     tokio::spawn(connection);
+//     debug!("Spawned dedicated connection for postgres notifications");
+//
+//     client
+//         .execute("LISTEN documents;", &[])
+//         .await
+//         .context(error::DBError)?;
+//
+//     debug!("Connection is closed: {:?}", client.is_closed());
+//
+//     //drop(client);
+//
+//     Ok(rx.filter_map(|m| match m {
+//         AsyncMessage::Notification(n) => {
+//             debug!("Received notification on channel: {}", n.channel());
+//             future::ready(Some(Ok((
+//                 sse::event(String::from(n.channel())),
+//                 sse::data(String::from(n.payload())),
+//             ))))
+//         }
+//         _ => {
+//             debug!("Received something on channel.");
+//             future::ready(None)
+//         }
+//     }))
+// }
 
 async fn doc2db(
     pool: Pool<PostgresConnectionManager<tokio_postgres::NoTls>>,
@@ -280,7 +314,7 @@ async fn connect_raw(
         .expect("port");
 
     let conn = format!("{}:{}", host, port);
-    println!("Connecting to {}", conn);
+    debug!("Connecting to {}", conn);
     let socket = TcpStream::connect(conn).await.context(error::IOError)?;
     config
         .connect_raw(socket, NoTls)
