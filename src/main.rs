@@ -7,10 +7,8 @@ use snafu::{NoneError, ResultExt};
 use std::convert::Infallible;
 use std::env;
 use std::path::PathBuf;
-use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
-use tokio::time::interval;
 use tokio_postgres::tls::{NoTls, NoTlsStream};
 use tokio_postgres::{config::Host, AsyncMessage, Client, Config, Connection};
 use uuid::Uuid;
@@ -157,6 +155,8 @@ async fn main() -> Result<()> {
     });
 
     let feed = warp::path("feed").and(warp::get()).and_then(|| async move {
+        debug!("Entering feed");
+
         let (tx, rx) = futures::channel::mpsc::unbounded();
 
         let (client, mut connection) =
@@ -164,12 +164,13 @@ async fn main() -> Result<()> {
                 .await
                 .unwrap();
 
-        let mut stream =
-            stream::poll_fn(move |cx| connection.poll_message(cx)).map_err(|e| panic!(e));
+        let stream = stream::poll_fn(move |cx| connection.poll_message(cx)).map_err(|e| panic!(e));
 
-        let connection = stream.forward(tx).map(|r| r.expect("stream forward"));
+        let connection = stream.forward(tx).map(|r| r.unwrap());
 
         tokio::spawn(connection);
+
+        debug!("execute LISTEN");
 
         client
             .execute("LISTEN documents;", &[])
@@ -177,7 +178,14 @@ async fn main() -> Result<()> {
             .context(error::DBError)
             .unwrap();
 
-        debug!("Spawned dedicated connection for postgres notifications");
+        debug!("LISTEN");
+
+        tokio::spawn(async move {
+            loop {}
+            drop(client);
+        });
+
+        debug!("After spawn");
 
         let stream = make_stream(rx).unwrap();
 
@@ -280,8 +288,4 @@ async fn connect_raw(
         .connect_raw(socket, NoTls)
         .await
         .context(error::DBError)
-}
-
-fn sse_counter(counter: u64) -> Result<impl ServerSentEvent, Infallible> {
-    Ok(warp::sse::data(counter))
 }
