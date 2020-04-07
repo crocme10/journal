@@ -1,8 +1,11 @@
-use postgres_types::ToSql;
+use chrono::prelude::*;
+use juniper::{GraphQLEnum, GraphQLObject};
+use postgres_types::{FromSql, ToSql};
 use serde::{Deserialize, Serialize};
+use tokio_postgres::row::Row;
 use uuid::Uuid;
 
-#[derive(Debug, ToSql, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, FromSql, ToSql, PartialEq, Serialize, Deserialize, GraphQLEnum)]
 #[postgres(name = "kind")]
 pub enum DocKind {
     #[postgres(name = "doc")]
@@ -11,7 +14,7 @@ pub enum DocKind {
     Post,
 }
 
-#[derive(Debug, ToSql, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, FromSql, ToSql, PartialEq, Serialize, Deserialize, GraphQLEnum)]
 #[postgres(name = "genre")]
 pub enum DocGenre {
     #[postgres(name = "tutorial")]
@@ -24,7 +27,7 @@ pub enum DocGenre {
     Reference,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, GraphQLObject)]
 pub struct Front {
     pub title: String,
     #[serde(rename = "abstract")]
@@ -51,4 +54,47 @@ pub fn default_kind() -> DocKind {
 
 pub fn default_genre() -> DocGenre {
     DocGenre::Tutorial
+}
+
+#[derive(Debug, GraphQLObject)]
+pub struct DocSummary {
+    pub front: Front,
+    pub id: Uuid,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<Row> for DocSummary {
+    fn from(row: Row) -> Self {
+        DocSummary {
+            id: row.get(0),
+            front: Front {
+                title: row.get(1),
+                outline: row.get(2),
+                author: row.get(3),
+                tags: row.get(4),
+                image: row.get(5),
+                kind: row.get(6),
+                genre: row.get(7),
+            },
+            updated_at: row.get(8),
+        }
+    }
+}
+
+impl From<&Row> for DocSummary {
+    fn from(row: &Row) -> Self {
+        DocSummary {
+            id: row.get(0),
+            front: Front {
+                title: row.get(1),
+                outline: row.get(2),
+                author: row.get(3),
+                tags: row.get(4),
+                image: row.get(5),
+                kind: row.get(6),
+                genre: row.get(7),
+            },
+            updated_at: row.get(8),
+        }
+    }
 }

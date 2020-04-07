@@ -1,13 +1,9 @@
-use futures::future;
-// use futures::stream::{Stream, StreamExt};
 use crate::model::{Doc, Front};
+use futures::future;
 use futures::stream::{TryStream, TryStreamExt};
 use inotify::{Event, EventMask, Inotify, WatchMask};
-use log::{debug, error, info, warn};
-use snafu::{
-    futures::try_future::TryFutureExt as SnafuF, futures::try_stream::TryStreamExt as SnafuTSE,
-    Backtrace, ResultExt, Snafu,
-};
+use log::debug;
+use snafu::{futures::try_stream::TryStreamExt as SnafuTSE, Backtrace, ResultExt, Snafu};
 use std::io::{self, BufReader, Read};
 use std::path::PathBuf;
 use uuid::Uuid;

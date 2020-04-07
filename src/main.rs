@@ -1,12 +1,13 @@
 use bb8_postgres::{bb8::Pool, PostgresConnectionManager};
 use clap::{App, Arg};
-use futures::future;
-use futures::{stream, FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
+use futures::{future, stream, FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
+use juniper;
 use log::{debug, error, info, warn};
 use snafu::{NoneError, ResultExt};
 use std::convert::Infallible;
 use std::env;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_postgres::tls::{NoTls, NoTlsStream};
@@ -15,12 +16,21 @@ use uuid::Uuid;
 use warp::{
     self,
     filters::sse::{self, ServerSentEvent},
-    Filter,
+    filters::BoxedFilter,
+    path, Filter,
 };
 
 mod error;
+mod gql;
 mod model;
 mod watcher;
+
+type Schema = juniper::RootNode<
+    'static,
+    gql::Query,
+    juniper::EmptyMutation<gql::Context>,
+    juniper::EmptySubscription<gql::Context>,
+>;
 
 type Result<T, E = error::Error> = std::result::Result<T, E>;
 
@@ -154,6 +164,7 @@ async fn main() -> Result<()> {
         info!("Terminating Watcher");
     });
 
+    // TODO Move feed function to separate function to keep main small
     let feed = warp::path("feed").and(warp::get()).and_then(|| async move {
         debug!("Entering feed");
 
@@ -192,9 +203,26 @@ async fn main() -> Result<()> {
         make_infallible(sse::reply(sse::keep_alive().stream(stream)))
     });
 
+    let state = warp::any().map(|| {
+        let client = futures::executor::block_on(connect(
+            "postgresql://journaladmin:secret@postgres/journal",
+        ))
+        .expect("db connection");
+        gql::Context { client }
+    });
+
+    let graphql_filter = juniper_warp::make_graphql_filter(schema(), state.boxed());
+
+    let gql_index = warp::path("graphiql")
+        .and(warp::path::end())
+        .and(warp::get())
+        .and(juniper_warp::graphiql_filter("/graphql"));
+
+    let gql_query = warp::path("graphql").and(graphql_filter);
+
     let index = warp::fs::file("dist/index.html");
     let dir = warp::fs::dir("dist");
-    let routes = feed.or(index).or(dir);
+    let routes = gql_index.or(gql_query).or(feed).or(index).or(dir);
     warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
     Ok(())
 }
@@ -288,4 +316,19 @@ async fn connect_raw(
         .connect_raw(socket, NoTls)
         .await
         .context(error::DBError)
+}
+
+async fn connect(s: &str) -> Result<Client, error::Error> {
+    let (client, conn) = connect_raw(s).await?;
+    let conn = conn.map(|r| r.unwrap());
+    tokio::spawn(conn);
+    Ok(client)
+}
+
+fn schema() -> Schema {
+    Schema::new(
+        gql::Query,
+        juniper::EmptyMutation::<gql::Context>::new(),
+        juniper::EmptySubscription::<gql::Context>::new(),
+    )
 }

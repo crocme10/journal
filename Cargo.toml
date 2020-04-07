@@ -8,16 +8,22 @@ edition = "2018"
 
 [dependencies]
 bb8-postgres = { version = "0.4", features = ["with-uuid-0_8"] }
-tokio-postgres = { version = "0.5", features = ["with-uuid-0_8"] }
+tokio-postgres = { version = "0.5", features = ["with-uuid-0_8", "with-chrono-0_4"] }
 postgres-types = { version = "0.1", features = ["derive"] }
 tokio = { version = "0.2.13", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.8"
+serde_json = "1.0"
 yaml-rust = "0.4"
 snafu = { version = "0.6", features = [ "futures" ] }
+# juniper = { version = "0.14", features = ["chrono", "uuid"] }
+juniper = { git="https://github.com/graphql-rust/juniper.git", features = ["chrono", "uuid"] }
+juniper_warp = { git="https://github.com/graphql-rust/juniper.git" }
+jsonwebtoken = "6.0"
 inotify = "0.8"
 futures = { version = "0.3", features = [ "compat" ] }
 clap = "2.33"
+chrono = "0.4"
 uuid = { version = "0.8", features = ["serde", "v4"] }
 pretty_env_logger = "0.4"
 log = "0.4"
