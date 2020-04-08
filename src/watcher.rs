@@ -1,4 +1,5 @@
 use crate::model::{Doc, Front};
+use chrono::prelude::*;
 use futures::future;
 use futures::stream::{TryStream, TryStreamExt};
 use inotify::{Event, EventMask, Inotify, WatchMask};
@@ -169,6 +170,7 @@ fn path_to_doc(path: PathBuf) -> impl future::TryFuture<Ok = Option<Doc>, Error 
             Ok(Some(Doc {
                 front,
                 id,
+                updated_at: Utc::now(),
                 content: String::from(v[2]),
             }))
         });

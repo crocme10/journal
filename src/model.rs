@@ -41,10 +41,11 @@ pub struct Front {
     pub genre: DocGenre,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, GraphQLObject)]
 pub struct Doc {
     pub front: Front,
     pub id: Uuid,
+    pub updated_at: DateTime<Utc>,
     pub content: String,
 }
 
@@ -56,6 +57,43 @@ pub fn default_genre() -> DocGenre {
     DocGenre::Tutorial
 }
 
+impl From<Row> for Doc {
+    fn from(row: Row) -> Self {
+        Doc {
+            id: row.get(0),
+            front: Front {
+                title: row.get(1),
+                outline: row.get(2),
+                author: row.get(3),
+                tags: row.get(4),
+                image: row.get(5),
+                kind: row.get(6),
+                genre: row.get(7),
+            },
+            updated_at: row.get(8),
+            content: row.get(9),
+        }
+    }
+}
+
+impl From<&Row> for Doc {
+    fn from(row: &Row) -> Self {
+        Doc {
+            id: row.get(0),
+            front: Front {
+                title: row.get(1),
+                outline: row.get(2),
+                author: row.get(3),
+                tags: row.get(4),
+                image: row.get(5),
+                kind: row.get(6),
+                genre: row.get(7),
+            },
+            updated_at: row.get(8),
+            content: row.get(9),
+        }
+    }
+}
 #[derive(Debug, GraphQLObject)]
 pub struct DocSummary {
     pub front: Front,

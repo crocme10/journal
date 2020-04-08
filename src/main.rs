@@ -222,8 +222,8 @@ async fn main() -> Result<()> {
 
     let index = warp::fs::file("dist/index.html");
     let dir = warp::fs::dir("dist");
-    let routes = gql_index.or(gql_query).or(feed).or(index).or(dir);
-    warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
+    let routes = gql_index.or(gql_query).or(feed).or(dir).or(index);
+    warp::serve(routes).run(([0, 0, 0, 0], 3030)).await;
     Ok(())
 }
 

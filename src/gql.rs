@@ -1,9 +1,8 @@
-use super::model::DocSummary;
-//use bb8_postgres::{bb8::Pool, PostgresConnectionManager};
+use super::model::{Doc, DocSummary};
 use juniper::{FieldResult, GraphQLObject, GraphQLType};
-use log::info;
+use log::{debug, info};
 use tokio_postgres::Client;
-// use uuid::Uuid;
+use uuid::Uuid;
 
 #[derive(Debug)]
 pub struct Context {
@@ -19,12 +18,19 @@ pub struct DocListResp {
     pub docs: Option<Vec<DocSummary>>,
 }
 
+#[derive(GraphQLObject, Debug)]
+pub struct DocResp {
+    pub ok: bool,
+    pub error: Option<String>,
+    pub doc: Option<Doc>,
+}
+
 pub struct Query;
 
 #[juniper::graphql_object( Context = Context)]
 impl Query {
     async fn docs(&self, context: &Context) -> FieldResult<DocListResp> {
-        info!("Querying Documents List");
+        debug!("Querying Documents List");
 
         // Search all documents with the kind = 'doc'
         match context
@@ -45,6 +51,34 @@ impl Query {
                 error: Some("Not existing user".to_string()),
                 docs: None,
             }),
+        }
+    }
+
+    async fn doc(&self, id: Uuid, context: &Context) -> FieldResult<DocResp> {
+        info!("Querying Document {}", id);
+
+        match context
+            .client
+            .query("SELECT * FROM document_details($1)", &[&id])
+            .await
+        {
+            Ok(rows) => {
+                let doc: Doc = rows.get(0).unwrap().into();
+                debug!("Got document: {:?}", doc);
+                Ok(DocResp {
+                    ok: true,
+                    error: None,
+                    doc: Some(doc),
+                })
+            }
+            Err(err) => {
+                debug!("Document Detail Error: {}", err);
+                Ok(DocResp {
+                    ok: false,
+                    error: Some("Not existing user".to_string()),
+                    doc: None,
+                })
+            }
         }
     }
 }
