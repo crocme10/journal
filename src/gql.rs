@@ -46,9 +46,9 @@ impl Query {
                     docs: Some(docs),
                 })
             }
-            Err(_err) => Ok(DocListResp {
+            Err(err) => Ok(DocListResp {
                 ok: false,
-                error: Some("Not existing user".to_string()),
+                error: Some(format!("Document List Error: {}", err)),
                 docs: None,
             }),
         }
@@ -64,7 +64,6 @@ impl Query {
         {
             Ok(rows) => {
                 let doc: Doc = rows.get(0).unwrap().into();
-                debug!("Got document: {:?}", doc);
                 Ok(DocResp {
                     ok: true,
                     error: None,
@@ -75,10 +74,35 @@ impl Query {
                 debug!("Document Detail Error: {}", err);
                 Ok(DocResp {
                     ok: false,
-                    error: Some("Not existing user".to_string()),
+                    error: Some(format!("Document Details Error: {}", err)),
                     doc: None,
                 })
             }
+        }
+    }
+
+    async fn doc_search(&self, search: String, context: &Context) -> FieldResult<DocListResp> {
+        debug!("Querying Documents Search {}", search);
+
+        // Search all documents with the kind = 'doc'
+        match context
+            .client
+            .query("SELECT * FROM document_search($1)", &[&search])
+            .await
+        {
+            Ok(rows) => {
+                let docs: Vec<DocSummary> = rows.iter().map(|r| r.into()).collect();
+                Ok(DocListResp {
+                    ok: true,
+                    error: None,
+                    docs: Some(docs),
+                })
+            }
+            Err(err) => Ok(DocListResp {
+                ok: false,
+                error: Some(format!("Document Search Error: {}", err)),
+                docs: None,
+            }),
         }
     }
 }
