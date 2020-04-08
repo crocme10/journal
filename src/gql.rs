@@ -105,4 +105,29 @@ impl Query {
             }),
         }
     }
+
+    async fn tag_search(&self, tag: String, context: &Context) -> FieldResult<DocListResp> {
+        debug!("Querying Tag Search {}", tag);
+
+        // Search all documents with the kind = 'doc'
+        match context
+            .client
+            .query("SELECT * FROM document_tag('doc', $1)", &[&tag])
+            .await
+        {
+            Ok(rows) => {
+                let docs: Vec<DocSummary> = rows.iter().map(|r| r.into()).collect();
+                Ok(DocListResp {
+                    ok: true,
+                    error: None,
+                    docs: Some(docs),
+                })
+            }
+            Err(err) => Ok(DocListResp {
+                ok: false,
+                error: Some(format!("Document Search Error: {}", err)),
+                docs: None,
+            }),
+        }
+    }
 }
