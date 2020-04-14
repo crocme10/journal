@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 #[derive(Debug, FromSql, ToSql, PartialEq, Serialize, Deserialize, GraphQLEnum)]
 #[postgres(name = "kind")]
+#[serde(rename_all = "lowercase")]
 pub enum DocKind {
     #[postgres(name = "doc")]
     Doc,
@@ -16,6 +17,7 @@ pub enum DocKind {
 
 #[derive(Debug, FromSql, ToSql, PartialEq, Serialize, Deserialize, GraphQLEnum)]
 #[postgres(name = "genre")]
+#[serde(rename_all = "lowercase")]
 pub enum DocGenre {
     #[postgres(name = "tutorial")]
     Tutorial,
