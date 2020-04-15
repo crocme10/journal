@@ -1,6 +1,6 @@
 use crate::watcher;
 use snafu::{Backtrace, Snafu};
-use std::io;
+use std::{num, io};
 use tokio::sync::mpsc::error::SendError;
 
 #[derive(Debug, Snafu)]
@@ -17,6 +17,13 @@ pub enum Error {
     #[snafu(visibility(pub))]
     IOError {
         source: io::Error,
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display("Parse Error: {}", source))]
+    #[snafu(visibility(pub))]
+    ParseError {
+        source: num::ParseIntError,
         backtrace: Backtrace,
     },
 

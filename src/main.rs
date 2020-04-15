@@ -47,17 +47,29 @@ async fn main() -> Result<()> {
         .author("Matthieu Paindavoine <matt@area403.org>")
         .about("Webserver for markdown journal")
         .arg(
+            Arg::with_name("dist")
+                .index(1)
+                .help("Directory to serve static file from."),
+        )
+        .arg(
             Arg::with_name("assets")
-                .multiple(true)
+                .index(2)
                 .help("Directory to monitor for files to serve"),
         )
         .get_matches();
 
-    let mut iter = matches
+    let mut assets = matches
         .values_of("assets")
         .ok_or(snafu::NoneError)
         .context(error::UserError {
             details: String::from("Missing assets"),
+        })?;
+
+    let mut dist = matches
+        .values_of("dist")
+        .ok_or(snafu::NoneError)
+        .context(error::UserError {
+            details: String::from("Missing dist"),
         })?;
 
     pretty_env_logger::init();
@@ -74,7 +86,7 @@ async fn main() -> Result<()> {
 
     // Build the connection string
     let connstr = format!(
-        "postgresql://{user}:{pwd}@postgres/{db}",
+        "postgresql://{user}:{pwd}@{host}/{db}",
         user = dotenv::var("POSTGRES_USER")
             .or(Err(NoneError))
             .context(error::EnvError {
@@ -89,6 +101,11 @@ async fn main() -> Result<()> {
             .or(Err(NoneError))
             .context(error::EnvError {
                 details: String::from("POSTGRES_DB")
+            })?,
+        host = dotenv::var("POSTGRES_HOST")
+            .or(Err(NoneError))
+            .context(error::EnvError {
+                details: String::from("POSTGRES_HOST")
             })?,
     );
 
@@ -134,14 +151,16 @@ async fn main() -> Result<()> {
         }
     });
 
-    let dir = PathBuf::from(iter.next().unwrap());
+    let assets_dir = PathBuf::from(assets.next().unwrap());
+
+    debug!("Monitoring {}", assets_dir.display());
 
     // This thread monitors a directory, and sends documents that have changed through a channel.
     tokio::spawn(async move {
-        let mut watcher = watcher::Watcher::new(dir.clone());
+        let mut watcher = watcher::Watcher::new(assets_dir.clone());
 
         if let Ok(mut stream) = watcher.doc_stream().context(error::IOError) {
-            debug!("document stream available");
+            debug!("Document Stream available");
             loop {
                 match stream.try_next().await {
                     Ok(opt_doc) => {
@@ -171,7 +190,7 @@ async fn main() -> Result<()> {
         let (tx, rx) = futures::channel::mpsc::unbounded();
 
         let (client, mut connection) =
-            connect_raw("postgresql://journaladmin:secret@postgres/journal")
+            connect_raw("postgresql://journaladmin:secret@localhost/journal")
                 .await
                 .unwrap();
 
@@ -205,7 +224,7 @@ async fn main() -> Result<()> {
 
     let state = warp::any().map(|| {
         let client = futures::executor::block_on(connect(
-            "postgresql://journaladmin:secret@postgres/journal",
+            "postgresql://journaladmin:secret@localhost/journal",
         ))
         .expect("db connection");
         gql::Context { client }
@@ -220,10 +239,44 @@ async fn main() -> Result<()> {
 
     let gql_query = warp::path("graphql").and(graphql_filter);
 
-    let index = warp::fs::file("dist/index.html");
-    let dir = warp::fs::dir("dist");
+    let dist_path = PathBuf::from(dist.next().unwrap());
+    let index_path = dist_path.join("index.html");
+    let index = warp::fs::file(index_path);
+    let dir = warp::fs::dir(dist_path);
     let routes = gql_index.or(gql_query).or(feed).or(dir).or(index);
-    warp::serve(routes).run(([0, 0, 0, 0], 3030)).await;
+
+    // Read the file ./server.env to extract TLS information and port
+    let serverenv = PathBuf::from("server.env");
+    dotenv::from_path(serverenv.as_path())
+        .or(Err(NoneError))
+        .context(error::EnvError {
+            details: String::from("server env"),
+        })?;
+
+    let cert_path = dotenv::var("CERT_PATH")
+        .or(Err(NoneError))
+        .context(error::EnvError {
+            details: String::from("CERT_PATH")
+        })?;
+    let key_path = dotenv::var("KEY_PATH")
+        .or(Err(NoneError))
+        .context(error::EnvError {
+            details: String::from("KEY_PATH")
+        })?;
+    let port = dotenv::var("SERVER_PORT")
+        .or(Err(NoneError))
+        .context(error::EnvError {
+            details: String::from("SERVER_PORT")
+        })?
+        .parse::<u16>()
+        .context(error::ParseError)?;
+
+    warp::serve(routes)
+        // .tls()
+        // .cert_path(cert_path)
+        // .key_path(key_path)
+        .run(([127, 0, 0, 1], port))
+        .await;
     Ok(())
 }
 

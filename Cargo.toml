@@ -19,7 +19,6 @@ snafu = { version = "0.6", features = [ "futures" ] }
 # juniper = { version = "0.14", features = ["chrono", "uuid"] }
 juniper = { git="https://github.com/graphql-rust/juniper.git", features = ["chrono", "uuid"] }
 juniper_warp = { git="https://github.com/graphql-rust/juniper.git" }
-jsonwebtoken = "6.0"
 inotify = "0.8"
 futures = { version = "0.3", features = [ "compat" ] }
 clap = "2.33"
@@ -27,5 +26,5 @@ chrono = { version = "0.4", features = [ "serde" ] }
 uuid = { version = "0.8", features = ["serde", "v4"] }
 pretty_env_logger = "0.4"
 log = "0.4"
-warp = "0.2"
+warp = { version = "0.2", features = [ "tls" ] }
 dotenv = "0.14"
