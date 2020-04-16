@@ -67,9 +67,9 @@ impl Watcher {
         Ok(event_stream
             .context(INotifyError)
             .and_then(event_to_path)
-            .try_filter_map(|opt_path| future::ok(opt_path))
+            .try_filter_map(future::ok)
             .and_then(path_to_doc)
-            .try_filter_map(|opt_doc| future::ok(opt_doc)))
+            .try_filter_map(future::ok))
     }
 }
 
@@ -78,7 +78,7 @@ fn event_to_path(
 ) -> impl future::TryFuture<Ok = Option<PathBuf>, Error = Error> {
     let opt_path = match event.name {
         Some(name) => {
-            let path = PathBuf::from(name.clone());
+            let path = PathBuf::from(name);
             if let Some(ext) = path.extension() {
                 if ext == "md" {
                     if event.mask.contains(EventMask::CREATE) {
@@ -127,21 +127,19 @@ fn path_to_doc(path: PathBuf) -> impl future::TryFuture<Ok = Option<Doc>, Error 
 
     debug!("Checking file: {}", p.display());
     let res = std::fs::File::open(p.clone())
-        .context(FileIOError {
-            path: PathBuf::from(p.clone()),
-        })
+        .context(FileIOError { path: p.clone() })
         .and_then(|file| {
             let mut reader = BufReader::new(file);
             let mut buffer = String::new();
-            reader.read_to_string(&mut buffer).context(FileIOError {
-                path: PathBuf::from(p),
-            })?;
+            reader
+                .read_to_string(&mut buffer)
+                .context(FileIOError { path: p })?;
             Ok(buffer)
         })
         .and_then(|contents| {
             // This condition occurs when working with eg neovim...
             // I'm not trying to investigate, just guarding against it.
-            if contents.len() == 0 {
+            if contents.is_empty() {
                 return Ok(None);
             }
             let v: Vec<&str> = contents.splitn(3, "---").collect();

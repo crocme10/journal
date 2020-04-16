@@ -1,25 +1,23 @@
 use bb8_postgres::{bb8::Pool, PostgresConnectionManager};
-use clap::{App, Arg};
 use futures::{future, stream, FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use juniper;
 use log::{debug, error, info, warn};
 use snafu::{NoneError, ResultExt};
-use std::convert::Infallible;
-use std::env;
-use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::net::TcpStream;
-use tokio::sync::mpsc;
-use tokio_postgres::tls::{NoTls, NoTlsStream};
-use tokio_postgres::{config::Host, AsyncMessage, Client, Config, Connection};
+use std::{convert::Infallible, env, sync::Arc};
+use tokio::{net::TcpStream, sync::mpsc};
+use tokio_postgres::{
+    config::Host,
+    tls::{NoTls, NoTlsStream},
+    AsyncMessage, Client, Config, Connection,
+};
 use uuid::Uuid;
 use warp::{
     self,
     filters::sse::{self, ServerSentEvent},
-    filters::BoxedFilter,
-    path, Filter,
+    Filter,
 };
 
+mod config;
 mod error;
 mod gql;
 mod model;
@@ -42,35 +40,7 @@ enum Payload {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let matches = App::new("journal")
-        .version("0.1.0")
-        .author("Matthieu Paindavoine <matt@area403.org>")
-        .about("Webserver for markdown journal")
-        .arg(
-            Arg::with_name("dist")
-                .index(1)
-                .help("Directory to serve static file from."),
-        )
-        .arg(
-            Arg::with_name("assets")
-                .index(2)
-                .help("Directory to monitor for files to serve"),
-        )
-        .get_matches();
-
-    let mut assets = matches
-        .values_of("assets")
-        .ok_or(snafu::NoneError)
-        .context(error::UserError {
-            details: String::from("Missing assets"),
-        })?;
-
-    let mut dist = matches
-        .values_of("dist")
-        .ok_or(snafu::NoneError)
-        .context(error::UserError {
-            details: String::from("Missing dist"),
-        })?;
+    let config = config::Config::new("server.env")?;
 
     pretty_env_logger::init();
 
@@ -151,13 +121,11 @@ async fn main() -> Result<()> {
         }
     });
 
-    let assets_dir = PathBuf::from(assets.next().unwrap());
-
-    debug!("Monitoring {}", assets_dir.display());
-
     // This thread monitors a directory, and sends documents that have changed through a channel.
+    debug!("Monitoring {}", config.assets_path.display());
+    let assets_path = config.assets_path.clone();
     tokio::spawn(async move {
-        let mut watcher = watcher::Watcher::new(assets_dir.clone());
+        let mut watcher = watcher::Watcher::new(assets_path);
 
         if let Ok(mut stream) = watcher.doc_stream().context(error::IOError) {
             debug!("Document Stream available");
@@ -183,50 +151,22 @@ async fn main() -> Result<()> {
         info!("Terminating Watcher");
     });
 
+    let connstr = Arc::new(connstr);
+    let connstr1 = Arc::clone(&connstr);
+
     // TODO Move feed function to separate function to keep main small
-    let feed = warp::path("feed").and(warp::get()).and_then(|| async move {
-        debug!("Entering feed");
-
-        let (tx, rx) = futures::channel::mpsc::unbounded();
-
-        let (client, mut connection) =
-            connect_raw("postgresql://journaladmin:secret@localhost/journal")
-                .await
-                .unwrap();
-
-        let stream = stream::poll_fn(move |cx| connection.poll_message(cx)).map_err(|e| panic!(e));
-
-        let connection = stream.forward(tx).map(|r| r.unwrap());
-
-        tokio::spawn(connection);
-
-        debug!("execute LISTEN");
-
-        client
-            .execute("LISTEN documents;", &[])
-            .await
-            .context(error::DBError)
-            .unwrap();
-
-        debug!("LISTEN");
-
-        tokio::spawn(async move {
-            loop {}
-            drop(client);
-        });
-
-        debug!("After spawn");
-
-        let stream = make_stream(rx).unwrap();
-
-        make_infallible(sse::reply(sse::keep_alive().stream(stream)))
+    let feed = warp::path("feed").and(warp::get()).and_then(move || {
+        let connstr = Arc::clone(&connstr1);
+        async move {
+            let stream = feed_stream(&connstr).await.unwrap();
+            make_infallible(sse::reply(sse::keep_alive().stream(stream)))
+        }
     });
 
-    let state = warp::any().map(|| {
-        let client = futures::executor::block_on(connect(
-            "postgresql://journaladmin:secret@localhost/journal",
-        ))
-        .expect("db connection");
+    let connstr2 = Arc::clone(&connstr);
+
+    let state = warp::any().map(move || {
+        let client = futures::executor::block_on(connect(&connstr2)).expect("db connection");
         gql::Context { client }
     });
 
@@ -239,45 +179,56 @@ async fn main() -> Result<()> {
 
     let gql_query = warp::path("graphql").and(graphql_filter);
 
-    let dist_path = PathBuf::from(dist.next().unwrap());
-    let index_path = dist_path.join("index.html");
+    let index_path = config.static_path.join("index.html");
     let index = warp::fs::file(index_path);
-    let dir = warp::fs::dir(dist_path);
+    let dir = warp::fs::dir(config.static_path);
     let routes = gql_index.or(gql_query).or(feed).or(dir).or(index);
-
-    // Read the file ./server.env to extract TLS information and port
-    let serverenv = PathBuf::from("server.env");
-    dotenv::from_path(serverenv.as_path())
-        .or(Err(NoneError))
-        .context(error::EnvError {
-            details: String::from("server env"),
-        })?;
-
-    let cert_path = dotenv::var("CERT_PATH")
-        .or(Err(NoneError))
-        .context(error::EnvError {
-            details: String::from("CERT_PATH")
-        })?;
-    let key_path = dotenv::var("KEY_PATH")
-        .or(Err(NoneError))
-        .context(error::EnvError {
-            details: String::from("KEY_PATH")
-        })?;
-    let port = dotenv::var("SERVER_PORT")
-        .or(Err(NoneError))
-        .context(error::EnvError {
-            details: String::from("SERVER_PORT")
-        })?
-        .parse::<u16>()
-        .context(error::ParseError)?;
 
     warp::serve(routes)
         // .tls()
         // .cert_path(cert_path)
         // .key_path(key_path)
-        .run(([127, 0, 0, 1], port))
+        .run(([127, 0, 0, 1], config.port))
         .await;
     Ok(())
+}
+
+async fn feed_stream(
+    connstr: &str,
+) -> Result<
+    impl Stream<Item = Result<impl ServerSentEvent + Send + 'static, Infallible>> + Send + 'static,
+    Infallible,
+> {
+    debug!("Entering feed");
+
+    let (tx, rx) = futures::channel::mpsc::unbounded();
+
+    let (client, mut connection) = connect_raw(connstr).await.unwrap();
+
+    let stream = stream::poll_fn(move |cx| connection.poll_message(cx)).map_err(|e| panic!(e));
+
+    let connection = stream.forward(tx).map(|r| r.unwrap());
+
+    tokio::spawn(connection);
+
+    debug!("execute LISTEN");
+
+    client
+        .execute("LISTEN documents;", &[])
+        .await
+        .context(error::DBError)
+        .unwrap();
+
+    debug!("LISTEN");
+
+    tokio::spawn(async move {
+        loop {}
+        drop(client);
+    });
+
+    debug!("After spawn");
+
+    make_stream(rx)
 }
 
 fn make_stream(
