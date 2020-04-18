@@ -1,7 +1,5 @@
 use super::error;
 use snafu::{NoneError, ResultExt};
-// use std::env;
-use std::path::Path;
 use std::path::PathBuf;
 
 pub struct Config {
@@ -13,14 +11,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn new<P: AsRef<Path>>(env_path: P) -> Result<Config, error::Error> {
-        // Read the file ./server.env to extract TLS information and port
-        dotenv::from_path(env_path)
-            .or(Err(NoneError))
-            .context(error::EnvError {
-                details: String::from("server env"),
-            })?;
-
+    pub fn new() -> Result<Config, error::Error> {
         let cert_path = dotenv::var("CERT_PATH")
             .or(Err(NoneError))
             .context(error::EnvError {

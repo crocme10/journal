@@ -1,6 +1,6 @@
 use crate::watcher;
 use snafu::{Backtrace, Snafu};
-use std::{num, io};
+use std::{io, num};
 use tokio::sync::mpsc::error::SendError;
 
 #[derive(Debug, Snafu)]
@@ -37,21 +37,7 @@ pub enum Error {
     #[snafu(display("DB Connection Error: {}", source))]
     #[snafu(visibility(pub))]
     DBConnError {
-        source: tokio_postgres::Error,
-        backtrace: Backtrace,
-    },
-
-    #[snafu(display("DB Pool Error: {}", source))]
-    #[snafu(visibility(pub))]
-    DBPoolError {
-        source: bb8_postgres::bb8::RunError<tokio_postgres::Error>,
-        backtrace: Backtrace,
-    },
-
-    #[snafu(display("DB Error: {}", source))]
-    #[snafu(visibility(pub))]
-    DBError {
-        source: tokio_postgres::Error,
+        source: sqlx::error::Error,
         backtrace: Backtrace,
     },
 

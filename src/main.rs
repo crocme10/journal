@@ -1,15 +1,11 @@
-use bb8_postgres::{bb8::Pool, PostgresConnectionManager};
+use chrono::{DateTime, Utc};
 use futures::{future, stream, FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use juniper;
 use log::{debug, error, info, warn};
 use snafu::{NoneError, ResultExt};
+use sqlx::postgres::{PgNotification, PgPool, PgQueryAs};
 use std::{convert::Infallible, env, sync::Arc};
 use tokio::{net::TcpStream, sync::mpsc};
-use tokio_postgres::{
-    config::Host,
-    tls::{NoTls, NoTlsStream},
-    AsyncMessage, Client, Config, Connection,
-};
 use uuid::Uuid;
 use warp::{
     self,
@@ -40,65 +36,42 @@ enum Payload {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let config = config::Config::new("server.env")?;
+    let _dotenv = dotenv::dotenv()
+        .or(Err(NoneError))
+        .context(error::EnvError {
+            details: String::from("dot env"),
+        })?;
+
+    let config = config::Config::new()?;
 
     pretty_env_logger::init();
 
-    // Read the file ./postgres/database.env to extract user, password, and database name
-    let dbenv = env::current_dir()
-        .and_then(|d| Ok(d.join("sql").join("database.env")))
-        .context(error::IOError)?;
-    dotenv::from_path(dbenv.as_path())
+    let connstr = dotenv::var("DATABASE_URL")
         .or(Err(NoneError))
         .context(error::EnvError {
-            details: String::from("database env"),
-        })?;
-
-    // Build the connection string
-    let connstr = format!(
-        "postgresql://{user}:{pwd}@{host}/{db}",
-        user = dotenv::var("POSTGRES_USER")
-            .or(Err(NoneError))
-            .context(error::EnvError {
-                details: String::from("POSTGRES_USER")
-            })?,
-        pwd = dotenv::var("POSTGRES_PASSWORD")
-            .or(Err(NoneError))
-            .context(error::EnvError {
-                details: String::from("POSTGRES_PASSWORD")
-            })?,
-        db = dotenv::var("POSTGRES_DB")
-            .or(Err(NoneError))
-            .context(error::EnvError {
-                details: String::from("POSTGRES_DB")
-            })?,
-        host = dotenv::var("POSTGRES_HOST")
-            .or(Err(NoneError))
-            .context(error::EnvError {
-                details: String::from("POSTGRES_HOST")
-            })?,
-    );
+            details: String::from("DATABASE_URL"),
+        })?
+        .to_string();
 
     debug!("DB Connection String: {}", connstr);
 
     // FIXME 1024 ??
     let (mut tx1, mut rx1) = mpsc::channel(1024);
 
-    let pg_mgr = PostgresConnectionManager::new_from_stringlike(&connstr, tokio_postgres::NoTls)
-        .context(error::DBConnError)?;
-
-    let pool = Pool::builder()
-        .build(pg_mgr)
+    let pool = PgPool::builder()
+        .max_size(5) // maximum number of connections in the pool
+        .build(&connstr)
         .await
         .context(error::DBConnError)?;
 
+    let pool1 = pool.clone();
     // This thread receives documents, and inserts them in the database.
     tokio::spawn(async move {
         while let Some(payload) = rx1.recv().await {
             debug!("Received payload");
             match payload {
                 Payload::Doc(doc) => {
-                    doc2db(pool.clone(), doc)
+                    doc2db(pool1.clone(), doc)
                         .map_ok_or_else(
                             |err| error!("insert error: {}", err),
                             |id| info!("id: {}", id),
@@ -155,20 +128,17 @@ async fn main() -> Result<()> {
     let connstr1 = Arc::clone(&connstr);
 
     // TODO Move feed function to separate function to keep main small
-    let feed = warp::path("feed").and(warp::get()).and_then(move || {
-        let connstr = Arc::clone(&connstr1);
-        async move {
-            let stream = feed_stream(&connstr).await.unwrap();
-            make_infallible(sse::reply(sse::keep_alive().stream(stream)))
-        }
-    });
+    // let feed = warp::path("feed").and(warp::get()).and_then(move || {
+    //     let connstr = Arc::clone(&connstr1);
+    //     async move {
+    //         let stream = feed_stream(&connstr).await.unwrap();
+    //         make_infallible(sse::reply(sse::keep_alive().stream(stream)))
+    //     }
+    // });
 
     let connstr2 = Arc::clone(&connstr);
 
-    let state = warp::any().map(move || {
-        let client = futures::executor::block_on(connect(&connstr2)).expect("db connection");
-        gql::Context { client }
-    });
+    let state = warp::any().map(move || gql::Context { pool: pool.clone() });
 
     let graphql_filter = juniper_warp::make_graphql_filter(schema(), state.boxed());
 
@@ -182,7 +152,8 @@ async fn main() -> Result<()> {
     let index_path = config.static_path.join("index.html");
     let index = warp::fs::file(index_path);
     let dir = warp::fs::dir(config.static_path);
-    let routes = gql_index.or(gql_query).or(feed).or(dir).or(index);
+    // let routes = gql_index.or(gql_query).or(feed).or(dir).or(index);
+    let routes = gql_index.or(gql_query).or(dir).or(index);
 
     warp::serve(routes)
         // .tls()
@@ -193,141 +164,136 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn feed_stream(
-    connstr: &str,
-) -> Result<
-    impl Stream<Item = Result<impl ServerSentEvent + Send + 'static, Infallible>> + Send + 'static,
-    Infallible,
-> {
-    debug!("Entering feed");
+// async fn feed_stream(
+//     connstr: &str,
+// ) -> Result<
+//     impl Stream<Item = Result<impl ServerSentEvent + Send + 'static, Infallible>> + Send + 'static,
+//     Infallible,
+// > {
+//     debug!("Entering feed");
+//
+//     let (tx, rx) = futures::channel::mpsc::unbounded();
+//
+//     let (client, mut connection) = connect_raw(connstr).await.unwrap();
+//
+//     let stream = stream::poll_fn(move |cx| connection.poll_message(cx)).map_err(|e| panic!(e));
+//
+//     let connection = stream.forward(tx).map(|r| r.unwrap());
+//
+//     tokio::spawn(connection);
+//
+//     debug!("execute LISTEN");
+//
+//     client
+//         .execute("LISTEN documents;", &[])
+//         .await
+//         .context(error::DBError)
+//         .unwrap();
+//
+//     debug!("LISTEN");
+//
+//     tokio::spawn(async move {
+//         loop {}
+//         drop(client);
+//     });
+//
+//     debug!("After spawn");
+//
+//     make_stream(rx)
+// }
 
-    let (tx, rx) = futures::channel::mpsc::unbounded();
+// fn make_stream(
+//     rx: futures::channel::mpsc::UnboundedReceiver<PgNotification>,
+// ) -> Result<
+//     impl Stream<Item = Result<impl ServerSentEvent + Send + 'static, Infallible>> + Send + 'static,
+//     Infallible,
+// > {
+//     Ok(rx.filter_map(|m| match m {
+//         PgNotification::Notification(n) => {
+//             debug!("Received notification on channel: {}", n.channel());
+//             future::ready(Some(Ok((
+//                 sse::event(String::from(n.channel())),
+//                 sse::data(String::from(n.payload())),
+//             ))))
+//         }
+//         _ => {
+//             debug!("Received something on channel.");
+//             future::ready(None)
+//         }
+//     }))
+// }
+//
+// fn make_infallible<T>(t: T) -> Result<T, Infallible> {
+//     Ok(t)
+// }
 
-    let (client, mut connection) = connect_raw(connstr).await.unwrap();
+async fn doc2db(pool: PgPool, doc: model::Doc) -> Result<String, error::Error> {
+    //let conn = pool.acquire().await.context(error::DBConnError)?;
 
-    let stream = stream::poll_fn(move |cx| connection.poll_message(cx)).map_err(|e| panic!(e));
+    let (id, created_at): (Uuid, chrono::DateTime<Utc>) = sqlx::query_as(
+        "SELECT _id::UUID, _created_at::TIMESTAMPTZ FROM create_document_with_id(
+            $1::UUID, $2::TEXT, $3::TEXT, $4::TEXT, $5::TEXT,
+            $6::TEXT[], $7::TEXT, $8::KIND, $9::GENRE)",
+    )
+    .bind(&doc.id)
+    .bind(&doc.front.title)
+    .bind(&doc.front.outline)
+    .bind(&doc.front.author)
+    .bind(&doc.content)
+    .bind(&doc.front.tags)
+    .bind(&doc.front.image)
+    .bind(&doc.front.kind)
+    .bind(&doc.front.genre)
+    .fetch_one(&pool)
+    .await
+    .context(error::DBConnError)?;
 
-    let connection = stream.forward(tx).map(|r| r.unwrap());
-
-    tokio::spawn(connection);
-
-    debug!("execute LISTEN");
-
-    client
-        .execute("LISTEN documents;", &[])
-        .await
-        .context(error::DBError)
-        .unwrap();
-
-    debug!("LISTEN");
-
-    tokio::spawn(async move {
-        loop {}
-        drop(client);
-    });
-
-    debug!("After spawn");
-
-    make_stream(rx)
+    Ok(format!("{}: {}", id, created_at))
 }
 
-fn make_stream(
-    rx: futures::channel::mpsc::UnboundedReceiver<AsyncMessage>,
-) -> Result<
-    impl Stream<Item = Result<impl ServerSentEvent + Send + 'static, Infallible>> + Send + 'static,
-    Infallible,
-> {
-    Ok(rx.filter_map(|m| match m {
-        AsyncMessage::Notification(n) => {
-            debug!("Received notification on channel: {}", n.channel());
-            future::ready(Some(Ok((
-                sse::event(String::from(n.channel())),
-                sse::data(String::from(n.payload())),
-            ))))
-        }
-        _ => {
-            debug!("Received something on channel.");
-            future::ready(None)
-        }
-    }))
-}
-
-fn make_infallible<T>(t: T) -> Result<T, Infallible> {
-    Ok(t)
-}
-
-async fn doc2db(
-    pool: Pool<PostgresConnectionManager<tokio_postgres::NoTls>>,
-    doc: model::Doc,
-) -> Result<String, error::Error> {
-    let connection = pool.get().await.context(error::DBPoolError)?;
-
-    let stmt = connection.prepare("SELECT * FROM create_document_with_id($1::UUID, $2::TEXT, $3::TEXT, $4::TEXT, $5::TEXT, $6::TEXT[], $7::TEXT, $8::KIND, $9::GENRE)").await.context(error::DBError)?;
-
-    let row = connection
-        .query_one(
-            &stmt,
-            &[
-                &doc.id,
-                &doc.front.title,
-                &doc.front.outline,
-                &doc.front.author,
-                &doc.content,
-                &doc.front.tags,
-                &doc.front.image,
-                &doc.front.kind,
-                &doc.front.genre,
-            ],
-        )
-        .await
-        .context(error::DBError)?;
-
-    Ok(format!("{}", row.get::<usize, Uuid>(0)))
-}
-
-async fn connect_raw(
-    s: &str,
-) -> Result<(Client, Connection<TcpStream, NoTlsStream>), error::Error> {
-    let config = s.parse::<Config>().context(error::DBError)?;
-    // Here we extract the host and port from the connection string.
-    // Note that the port may not necessarily be explicitely specified,
-    // the port 5432 is used by default.
-    let host = config
-        .get_hosts()
-        .first()
-        .ok_or(error::UserError {
-            details: String::from("Missing host"),
-        })
-        .and_then(|h| match h {
-            Host::Tcp(remote) => Ok(remote),
-            Host::Unix(_) => Err(error::UserError {
-                details: String::from("No local socket"),
-            }),
-        })
-        .expect("host");
-    let port = config
-        .get_ports()
-        .first()
-        .ok_or(error::UserError {
-            details: String::from("Missing port"),
-        })
-        .expect("port");
-
-    let conn = format!("{}:{}", host, port);
-    debug!("Connecting to {}", conn);
-    let socket = TcpStream::connect(conn).await.context(error::IOError)?;
-    config
-        .connect_raw(socket, NoTls)
-        .await
-        .context(error::DBError)
-}
-
-async fn connect(s: &str) -> Result<Client, error::Error> {
-    let (client, conn) = connect_raw(s).await?;
-    let conn = conn.map(|r| r.unwrap());
-    tokio::spawn(conn);
-    Ok(client)
-}
+// async fn connect_raw(
+//     s: &str,
+// ) -> Result<(Client, Connection<TcpStream, NoTlsStream>), error::Error> {
+//     let config = s.parse::<Config>().context(error::DBError)?;
+//     // Here we extract the host and port from the connection string.
+//     // Note that the port may not necessarily be explicitely specified,
+//     // the port 5432 is used by default.
+//     let host = config
+//         .get_hosts()
+//         .first()
+//         .ok_or(error::UserError {
+//             details: String::from("Missing host"),
+//         })
+//         .and_then(|h| match h {
+//             Host::Tcp(remote) => Ok(remote),
+//             Host::Unix(_) => Err(error::UserError {
+//                 details: String::from("No local socket"),
+//             }),
+//         })
+//         .expect("host");
+//     let port = config
+//         .get_ports()
+//         .first()
+//         .ok_or(error::UserError {
+//             details: String::from("Missing port"),
+//         })
+//         .expect("port");
+//
+//     let conn = format!("{}:{}", host, port);
+//     debug!("Connecting to {}", conn);
+//     let socket = TcpStream::connect(conn).await.context(error::IOError)?;
+//     config
+//         .connect_raw(socket, NoTls)
+//         .await
+//         .context(error::DBError)
+// }
+//
+// async fn connect(s: &str) -> Result<Client, error::Error> {
+//     let (client, conn) = connect_raw(s).await?;
+//     let conn = conn.map(|r| r.unwrap());
+//     tokio::spawn(conn);
+//     Ok(client)
+// }
 
 fn schema() -> Schema {
     Schema::new(

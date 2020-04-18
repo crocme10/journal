@@ -1,12 +1,12 @@
-use super::model::{Doc, DocSummary};
+use super::model::{Doc, DocKind, DocSummary};
 use juniper::{FieldResult, GraphQLObject, GraphQLType};
 use log::{debug, info};
-use tokio_postgres::Client;
+use sqlx::postgres::{PgPool, PgQueryAs};
 use uuid::Uuid;
 
 #[derive(Debug)]
 pub struct Context {
-    pub client: Client,
+    pub pool: PgPool,
 }
 
 impl juniper::Context for Context {}
@@ -27,19 +27,19 @@ pub struct DocResp {
 
 pub struct Query;
 
-#[juniper::graphql_object( Context = Context)]
+#[juniper::graphql_object(Context = Context)]
 impl Query {
     async fn docs(&self, context: &Context) -> FieldResult<DocListResp> {
         debug!("Querying Documents List");
 
         // Search all documents with the kind = 'doc'
-        match context
-            .client
-            .query("SELECT * FROM document_list('doc')", &[])
+        match sqlx::query_as("SELECT * FROM document_list($1)")
+            .bind(DocKind::Doc)
+            .fetch_all(&context.pool)
             .await
         {
             Ok(rows) => {
-                let docs: Vec<DocSummary> = rows.iter().map(|r| r.into()).collect();
+                let docs: Vec<DocSummary> = rows.into();
                 Ok(DocListResp {
                     ok: true,
                     error: None,
@@ -57,19 +57,17 @@ impl Query {
     async fn doc(&self, id: Uuid, context: &Context) -> FieldResult<DocResp> {
         info!("Querying Document {}", id);
 
-        match context
-            .client
-            .query("SELECT * FROM document_details($1)", &[&id])
-            .await
-        {
-            Ok(rows) => {
-                let doc: Doc = rows.get(0).unwrap().into();
-                Ok(DocResp {
-                    ok: true,
-                    error: None,
-                    doc: Some(doc),
-                })
-            }
+        let res: Result<Doc, sqlx::Error> = sqlx::query_as("SELECT * FROM document_details($1)")
+            .bind::<Uuid>(id)
+            .fetch_one(&context.pool)
+            .await;
+
+        match res {
+            Ok(doc) => Ok(DocResp {
+                ok: true,
+                error: None,
+                doc: Some(doc),
+            }),
             Err(err) => {
                 debug!("Document Detail Error: {}", err);
                 Ok(DocResp {
@@ -85,13 +83,13 @@ impl Query {
         debug!("Querying Documents Search {}", search);
 
         // Search all documents with the kind = 'doc'
-        match context
-            .client
-            .query("SELECT * FROM document_search($1)", &[&search])
+        match sqlx::query_as("SELECT * FROM document_search($1)")
+            .bind(&search)
+            .fetch_all(&context.pool)
             .await
         {
             Ok(rows) => {
-                let docs: Vec<DocSummary> = rows.iter().map(|r| r.into()).collect();
+                let docs: Vec<DocSummary> = rows.into();
                 Ok(DocListResp {
                     ok: true,
                     error: None,
@@ -110,13 +108,14 @@ impl Query {
         debug!("Querying Tag Search {}", tag);
 
         // Search all documents with the kind = 'doc'
-        match context
-            .client
-            .query("SELECT * FROM document_tag('doc', $1)", &[&tag])
+        match sqlx::query_as("SELECT * FROM document_tag($1, $2)")
+            .bind(DocKind::Doc)
+            .bind(&tag)
+            .fetch_all(&context.pool)
             .await
         {
             Ok(rows) => {
-                let docs: Vec<DocSummary> = rows.iter().map(|r| r.into()).collect();
+                let docs: Vec<DocSummary> = rows.into();
                 Ok(DocListResp {
                     ok: true,
                     error: None,

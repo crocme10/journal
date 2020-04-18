@@ -1,31 +1,29 @@
 use chrono::prelude::*;
 use juniper::{GraphQLEnum, GraphQLObject};
-use postgres_types::{FromSql, ToSql};
 use serde::{Deserialize, Serialize};
-use tokio_postgres::row::Row;
+use sqlx::{
+    postgres::PgRow,
+    row::{FromRow, Row},
+};
 use uuid::Uuid;
 
-#[derive(Debug, FromSql, ToSql, PartialEq, Serialize, Deserialize, GraphQLEnum)]
-#[postgres(name = "kind")]
+#[derive(Debug, sqlx::Type, PartialEq, Serialize, Deserialize, GraphQLEnum)]
+#[sqlx(rename = "kind")]
+#[sqlx(rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum DocKind {
-    #[postgres(name = "doc")]
     Doc,
-    #[postgres(name = "post")]
     Post,
 }
 
-#[derive(Debug, FromSql, ToSql, PartialEq, Serialize, Deserialize, GraphQLEnum)]
-#[postgres(name = "genre")]
+#[derive(Debug, sqlx::Type, PartialEq, Serialize, Deserialize, GraphQLEnum)]
+#[sqlx(rename = "genre")]
+#[sqlx(rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum DocGenre {
-    #[postgres(name = "tutorial")]
     Tutorial,
-    #[postgres(name = "howto")]
     Howto,
-    #[postgres(name = "background")]
     Background,
-    #[postgres(name = "reference")]
     Reference,
 }
 
@@ -59,9 +57,9 @@ pub fn default_genre() -> DocGenre {
     DocGenre::Tutorial
 }
 
-impl From<Row> for Doc {
-    fn from(row: Row) -> Self {
-        Doc {
+impl<'c> FromRow<'c, PgRow<'c>> for Doc {
+    fn from_row(row: &PgRow<'c>) -> Result<Self, sqlx::Error> {
+        Ok(Doc {
             id: row.get(0),
             front: Front {
                 title: row.get(1),
@@ -74,28 +72,10 @@ impl From<Row> for Doc {
             },
             updated_at: row.get(8),
             content: row.get(9),
-        }
+        })
     }
 }
 
-impl From<&Row> for Doc {
-    fn from(row: &Row) -> Self {
-        Doc {
-            id: row.get(0),
-            front: Front {
-                title: row.get(1),
-                outline: row.get(2),
-                author: row.get(3),
-                tags: row.get(4),
-                image: row.get(5),
-                kind: row.get(6),
-                genre: row.get(7),
-            },
-            updated_at: row.get(8),
-            content: row.get(9),
-        }
-    }
-}
 #[derive(Debug, GraphQLObject)]
 pub struct DocSummary {
     pub front: Front,
@@ -103,9 +83,9 @@ pub struct DocSummary {
     pub updated_at: DateTime<Utc>,
 }
 
-impl From<Row> for DocSummary {
-    fn from(row: Row) -> Self {
-        DocSummary {
+impl<'c> FromRow<'c, PgRow<'c>> for DocSummary {
+    fn from_row(row: &PgRow<'c>) -> Result<Self, sqlx::Error> {
+        Ok(DocSummary {
             id: row.get(0),
             front: Front {
                 title: row.get(1),
@@ -117,24 +97,6 @@ impl From<Row> for DocSummary {
                 genre: row.get(7),
             },
             updated_at: row.get(8),
-        }
-    }
-}
-
-impl From<&Row> for DocSummary {
-    fn from(row: &Row) -> Self {
-        DocSummary {
-            id: row.get(0),
-            front: Front {
-                title: row.get(1),
-                outline: row.get(2),
-                author: row.get(3),
-                tags: row.get(4),
-                image: row.get(5),
-                kind: row.get(6),
-                genre: row.get(7),
-            },
-            updated_at: row.get(8),
-        }
+        })
     }
 }
