@@ -1,6 +1,6 @@
 use super::model::{Doc, DocKind, DocSummary};
 use juniper::{FieldResult, GraphQLObject, GraphQLType};
-use log::{debug, info};
+use log::{debug, info, error};
 use sqlx::postgres::{PgPool, PgQueryAs};
 use uuid::Uuid;
 
@@ -46,11 +46,14 @@ impl Query {
                     docs: Some(docs),
                 })
             }
-            Err(err) => Ok(DocListResp {
-                ok: false,
-                error: Some(format!("Document List Error: {}", err)),
-                docs: None,
-            }),
+            Err(err) => {
+                error!("Error retrieving document list: {}", err);
+                Ok(DocListResp {
+                    ok: false,
+                    error: Some(format!("Document List Error: {}", err)),
+                    docs: None,
+                })
+            }
         }
     }
 
@@ -69,7 +72,7 @@ impl Query {
                 doc: Some(doc),
             }),
             Err(err) => {
-                debug!("Document Detail Error: {}", err);
+                error!("Error retrieving Document Detail: {}", err);
                 Ok(DocResp {
                     ok: false,
                     error: Some(format!("Document Details Error: {}", err)),
@@ -96,11 +99,14 @@ impl Query {
                     docs: Some(docs),
                 })
             }
-            Err(err) => Ok(DocListResp {
-                ok: false,
-                error: Some(format!("Document Search Error: {}", err)),
-                docs: None,
-            }),
+            Err(err) => {
+                error!("Error searching for documents: {}", err);
+                Ok(DocListResp {
+                    ok: false,
+                    error: Some(format!("Document Search Error: {}", err)),
+                    docs: None,
+                })
+            }
         }
     }
 
@@ -122,11 +128,14 @@ impl Query {
                     docs: Some(docs),
                 })
             }
-            Err(err) => Ok(DocListResp {
-                ok: false,
-                error: Some(format!("Document Search Error: {}", err)),
-                docs: None,
-            }),
+            Err(err) => {
+                error!("Error searching for documents by tag: {}", err);
+                Ok(DocListResp {
+                    ok: false,
+                    error: Some(format!("Document Search Error: {}", err)),
+                    docs: None,
+                })
+            }
         }
     }
 }

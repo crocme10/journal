@@ -156,9 +156,9 @@ async fn main() -> Result<()> {
     let routes = gql_index.or(gql_query).or(dir).or(index);
 
     warp::serve(routes)
-        // .tls()
-        // .cert_path(cert_path)
-        // .key_path(key_path)
+        .tls()
+        .cert_path(config.cert_path)
+        .key_path(config.key_path)
         .run(([127, 0, 0, 1], config.port))
         .await;
     Ok(())
