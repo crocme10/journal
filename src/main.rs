@@ -1,11 +1,10 @@
-use chrono::{DateTime, Utc};
-use futures::{future, stream, FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
+use chrono::Utc;
+use futures::{future, TryFutureExt, TryStreamExt};
 use juniper;
 use log::{debug, error, info, warn};
 use snafu::{NoneError, ResultExt};
-use sqlx::postgres::{PgNotification, PgPool, PgQueryAs};
-use std::{convert::Infallible, env, sync::Arc};
-use tokio::{net::TcpStream, sync::mpsc};
+use sqlx::postgres::{PgPool, PgQueryAs};
+use tokio::sync::mpsc;
 use uuid::Uuid;
 use warp::{
     self,
@@ -124,8 +123,8 @@ async fn main() -> Result<()> {
         info!("Terminating Watcher");
     });
 
-    let connstr = Arc::new(connstr);
-    let connstr1 = Arc::clone(&connstr);
+    // let connstr = Arc::new(connstr);
+    // let connstr1 = Arc::clone(&connstr);
 
     // TODO Move feed function to separate function to keep main small
     // let feed = warp::path("feed").and(warp::get()).and_then(move || {
@@ -136,7 +135,7 @@ async fn main() -> Result<()> {
     //     }
     // });
 
-    let connstr2 = Arc::clone(&connstr);
+    // let connstr2 = Arc::clone(&connstr);
 
     let state = warp::any().map(move || gql::Context { pool: pool.clone() });
 
@@ -149,17 +148,15 @@ async fn main() -> Result<()> {
 
     let gql_query = warp::path("graphql").and(graphql_filter);
 
-    let index_path = config.static_path.join("index.html");
-    let index = warp::fs::file(index_path);
-    let dir = warp::fs::dir(config.static_path);
-    // let routes = gql_index.or(gql_query).or(feed).or(dir).or(index);
-    let routes = gql_index.or(gql_query).or(dir).or(index);
+    let routes = gql_index.or(gql_query);
+
+    info!("Serving journal on 0.0.0.0:{}", config.port);
 
     warp::serve(routes)
         // .tls()
         // .cert_path(cert_path)
         // .key_path(key_path)
-        .run(([127, 0, 0, 1], config.port))
+        .run(([0, 0, 0, 0], config.port))
         .await;
     Ok(())
 }

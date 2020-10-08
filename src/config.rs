@@ -7,7 +7,6 @@ pub struct Config {
     pub key_path: PathBuf,
     pub port: u16,
     pub assets_path: PathBuf,
-    pub static_path: PathBuf,
 }
 
 impl Config {
@@ -22,12 +21,6 @@ impl Config {
             .context(error::EnvError {
                 details: String::from("KEY_PATH"),
             })?;
-        let static_path =
-            dotenv::var("STATIC_PATH")
-                .or(Err(NoneError))
-                .context(error::EnvError {
-                    details: String::from("STATIC_PATH"),
-                })?;
         let assets_path =
             dotenv::var("ASSETS_PATH")
                 .or(Err(NoneError))
@@ -47,7 +40,6 @@ impl Config {
             key_path: PathBuf::from(key_path),
             port,
             assets_path: PathBuf::from(assets_path),
-            static_path: PathBuf::from(static_path),
         })
     }
 }
