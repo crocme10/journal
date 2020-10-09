@@ -136,6 +136,14 @@ async fn main() -> Result<()> {
     // });
 
     // let connstr2 = Arc::clone(&connstr);
+    let cors = warp::cors()
+        .allow_any_origin()
+        .allow_methods(vec!["GET", "POST"])
+        .allow_headers(vec!["content-type", "authorization"])
+        .allow_any_origin()
+        .build();
+
+    let log = warp::log("foo");
 
     let state = warp::any().map(move || gql::Context { pool: pool.clone() });
 
@@ -148,7 +156,7 @@ async fn main() -> Result<()> {
 
     let gql_query = warp::path("graphql").and(graphql_filter);
 
-    let routes = gql_index.or(gql_query);
+    let routes = gql_index.or(gql_query).with(cors).with(log);
 
     info!("Serving journal on 0.0.0.0:{}", config.port);
 

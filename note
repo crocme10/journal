@@ -1,0 +1,21 @@
+#!/bin/bash
+
+b=$(uuidgen)
+f="${b}.md"
+read -p "title? " title
+read -p "abstract? " abstract
+read -p "tags? " tags
+d=$(date +"%Y-%m-%d")
+cat << EOF > assets/${f}
+---
+title: ${title}
+published: ${d}
+abstract: ${abstract}
+image: desert
+genre: tutorial
+author: Matthieu Paindavoine
+tags: ${tags}
+---
+EOF
+
+nvim "assets/${f}"
