@@ -30,6 +30,15 @@ impl From<db::DocKind> for DocKind {
     }
 }
 
+impl From<DocKind> for db::DocKind {
+    fn from(kind: DocKind) -> Self {
+        match kind {
+            DocKind::Doc => db::DocKind::Doc,
+            DocKind::Post => db::DocKind::Post,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Serialize, Deserialize, GraphQLEnum)]
 #[serde(rename_all = "camelCase")]
 pub enum DocGenre {
@@ -46,6 +55,17 @@ impl From<db::DocGenre> for DocGenre {
             db::DocGenre::Howto => DocGenre::Howto,
             db::DocGenre::Background => DocGenre::Background,
             db::DocGenre::Reference => DocGenre::Reference,
+        }
+    }
+}
+
+impl From<DocGenre> for db::DocGenre {
+    fn from(genre: DocGenre) -> Self {
+        match genre {
+            DocGenre::Tutorial => db::DocGenre::Tutorial,
+            DocGenre::Howto => db::DocGenre::Howto,
+            DocGenre::Background => db::DocGenre::Background,
+            DocGenre::Reference => db::DocGenre::Reference,
         }
     }
 }
@@ -145,9 +165,72 @@ impl From<Vec<Doc>> for MultiDocsResponseBody {
     }
 }
 
+// I haven't found a way to have struct that can be both GraphQLInputObject and GraphQLObject.
+// I would have like to use Doc to create a new document, but it doesn't work. So this is
+// the I don't want to think about it solution...
 #[derive(Debug, Deserialize, Serialize, GraphQLInputObject)]
-pub struct DocumentUpdateRequestBody {
-    pub doc: String,
+pub struct DocSpec {
+    pub id: Uuid,
+    pub title: String,
+    pub outline: String,
+    pub author: String,
+    pub tags: Vec<String>,
+    pub image: String,
+    pub kind: DocKind,
+    pub genre: DocGenre,
+    pub content: String,
+}
+
+impl From<DocSpec> for db::DocEntity {
+    fn from(spec: DocSpec) -> Self {
+        let DocSpec {
+            id,
+            title,
+            outline,
+            author,
+            tags,
+            image,
+            kind,
+            genre,
+            content,
+            ..
+        } = spec;
+
+        db::DocEntity {
+            id,
+            title,
+            outline,
+            author,
+            tags,
+            image,
+            kind: db::DocKind::from(kind),
+            genre: db::DocGenre::from(genre),
+            content,
+            updated_at: Utc::now(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, GraphQLInputObject)]
+pub struct DocumentRequestBody {
+    pub doc: DocSpec,
+}
+
+/// The response body for a document creation.
+#[derive(Debug, Deserialize, Serialize, GraphQLObject)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentCreationResponseBody {
+    pub id: Uuid,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<db::DocCreationAck> for DocumentCreationResponseBody {
+    fn from(ack: db::DocCreationAck) -> Self {
+        Self {
+            id: ack.id,
+            created_at: ack.created_at,
+        }
+    }
 }
 
 /// Retrieve all documents
@@ -222,6 +305,40 @@ pub async fn find_document_by_id(
                 }
             }
         }
+    }
+    .await
+}
+
+/// Create a new document, or update it if it exists already
+pub async fn create_or_update_document(
+    doc_request: DocumentRequestBody,
+    context: &Context,
+) -> Result<DocumentCreationResponseBody, error::Error> {
+    async move {
+        let DocumentRequestBody { doc } = doc_request;
+        let doc = db::DocEntity::from(doc);
+
+        let pool = &context.state.pool;
+
+        let mut tx = pool
+            .conn()
+            .and_then(Connection::begin)
+            .await
+            .context(error::DBError {
+                msg: "could not initiate transaction",
+            })?;
+
+        let resp = ProvideData::create_or_update_document(&mut tx as &mut sqlx::PgConnection, &doc)
+            .await
+            .context(error::DBProvideError {
+                msg: "Could not create or update document",
+            })?;
+
+        tx.commit().await.context(error::DBError {
+            msg: "could not retrieve indexes",
+        })?;
+
+        Ok(DocumentCreationResponseBody::from(resp))
     }
     .await
 }

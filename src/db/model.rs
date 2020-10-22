@@ -35,12 +35,21 @@ pub struct DocEntity {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone)]
+pub struct DocCreationAck {
+    pub id: EntityId,
+    pub created_at: DateTime<Utc>,
+}
+
 // From sqlx realworld example
 #[async_trait]
 pub trait ProvideData {
     async fn get_all_documents(&mut self) -> ProvideResult<Vec<DocEntity>>;
 
     async fn get_document_by_id(&mut self, id: EntityId) -> ProvideResult<Option<DocEntity>>;
+
+    async fn create_or_update_document(&mut self, doc: &DocEntity)
+        -> ProvideResult<DocCreationAck>;
 }
 
 pub type ProvideResult<T> = Result<T, ProvideError>;

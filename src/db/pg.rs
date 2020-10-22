@@ -32,6 +32,15 @@ impl From<DocKind> for model::DocKind {
     }
 }
 
+impl From<&model::DocKind> for DocKind {
+    fn from(kind: &model::DocKind) -> Self {
+        match kind {
+            model::DocKind::Doc => DocKind::Doc,
+            model::DocKind::Post => DocKind::Post,
+        }
+    }
+}
+
 #[derive(sqlx::Type)]
 #[sqlx(rename = "genre", rename_all = "lowercase")]
 pub enum DocGenre {
@@ -48,6 +57,17 @@ impl From<DocGenre> for model::DocGenre {
             DocGenre::Howto => model::DocGenre::Howto,
             DocGenre::Background => model::DocGenre::Background,
             DocGenre::Reference => model::DocGenre::Reference,
+        }
+    }
+}
+
+impl From<&model::DocGenre> for DocGenre {
+    fn from(genre: &model::DocGenre) -> Self {
+        match genre {
+            model::DocGenre::Tutorial => DocGenre::Tutorial,
+            model::DocGenre::Howto => DocGenre::Howto,
+            model::DocGenre::Background => DocGenre::Background,
+            model::DocGenre::Reference => DocGenre::Reference,
         }
     }
 }
@@ -110,6 +130,29 @@ impl From<DocEntity> for model::DocEntity {
             updated_at,
             content,
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DocCreationAck {
+    pub id: model::EntityId,
+    pub created_at: DateTime<Utc>,
+}
+
+impl<'c> FromRow<'c, PgRow<'c>> for DocCreationAck {
+    fn from_row(row: &PgRow<'c>) -> Result<Self, sqlx::Error> {
+        Ok(DocCreationAck {
+            id: row.get(0),
+            created_at: row.get(1),
+        })
+    }
+}
+
+impl From<DocCreationAck> for model::DocCreationAck {
+    fn from(pg: DocCreationAck) -> Self {
+        let DocCreationAck { id, created_at } = pg;
+
+        model::DocCreationAck { id, created_at }
     }
 }
 
@@ -194,6 +237,32 @@ WHERE id = $1
                 Ok(Some(doc))
             }
         }
+    }
+
+    async fn create_or_update_document(
+        &mut self,
+        doc: &model::DocEntity,
+    ) -> model::ProvideResult<model::DocCreationAck> {
+        let kind = DocKind::from(&doc.kind);
+        let genre = DocGenre::from(&doc.genre);
+        let resp: DocCreationAck = sqlx::query_as(
+            "SELECT _id::UUID, _created_at::TIMESTAMPTZ FROM create_document_with_id(
+            $1::UUID, $2::TEXT, $3::TEXT, $4::TEXT, $5::TEXT,
+            $6::TEXT[], $7::TEXT, $8::KIND, $9::GENRE)",
+        )
+        .bind(&doc.id)
+        .bind(&doc.title)
+        .bind(&doc.outline)
+        .bind(&doc.author)
+        .bind(&doc.content)
+        .bind(&doc.tags)
+        .bind(&doc.image)
+        .bind(&kind)
+        .bind(&genre)
+        .fetch_one(self)
+        .await?;
+
+        Ok(model::DocCreationAck::from(resp))
     }
 }
 

@@ -44,17 +44,14 @@ pub struct Mutation;
     Context = Context
 )]
 impl Mutation {
-    async fn add_document(
+    async fn create_or_update_document(
         &self,
-        _doc: model::DocumentUpdateRequestBody,
-        _context: &Context,
-    ) -> FieldResult<model::SingleDocResponseBody> {
-        // users::add_user(user, context)
-        //     .await
-        //     .map_err(IntoFieldError::into_field_error)
-        Err(IntoFieldError::into_field_error(error::Error::MiscError {
-            msg: String::from("not implemented"),
-        }))
+        doc: model::DocumentRequestBody,
+        context: &Context,
+    ) -> FieldResult<model::DocumentCreationResponseBody> {
+        model::create_or_update_document(doc, context)
+            .await
+            .map_err(IntoFieldError::into_field_error)
     }
 }
 
