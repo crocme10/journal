@@ -1,12 +1,8 @@
 use clap::ArgMatches;
-use futures::FutureExt;
-use juniper_graphql_ws::ConnectionConfig;
-use juniper_warp::{playground_filter, subscriptions::serve_graphql_ws};
-use slog::{info, Logger};
+use juniper_warp::playground_filter;
+use slog::{debug, info, Logger};
 use snafu::ResultExt;
-//use sqlx::sqlite::SqlitePool;
 use std::net::ToSocketAddrs;
-use std::sync::Arc;
 use warp::{self, Filter};
 
 use journal::api::gql;
@@ -23,6 +19,7 @@ pub async fn run<'a>(matches: &ArgMatches<'a>, logger: Logger) -> Result<(), err
 
 pub async fn run_server(state: State) -> Result<(), error::Error> {
     // We keep a copy of the logger before the context takes ownership of it.
+    debug!(state.logger, "Entering server");
     let state1 = state.clone();
     let qm_state1 = warp::any().map(move || gql::Context {
         state: state1.clone(),
@@ -36,31 +33,6 @@ pub async fn run_server(state: State) -> Result<(), error::Error> {
             qm_state1.boxed(),
         ));
 
-    let root_node = Arc::new(gql::schema());
-
-    let state2 = state.clone();
-    let qm_state2 = warp::any().map(move || gql::Context {
-        state: state2.clone(),
-    });
-
-    let notifications = warp::path("subscriptions")
-        .and(warp::ws())
-        .and(qm_state2.clone())
-        .map(move |ws: warp::ws::Ws, context: gql::Context| {
-            let root_node = root_node.clone();
-            ws.on_upgrade(move |websocket| async move {
-                info!(context.state.logger, "Server received subscription request");
-                serve_graphql_ws(websocket, root_node, ConnectionConfig::new(context))
-                    .map(|r| {
-                        if let Err(e) = r {
-                            println!("Websocket err: {}", e);
-                        }
-                    })
-                    .await
-            })
-        })
-        .map(|reply| warp::reply::with_header(reply, "Sec-Websocket-Protocol", "graphql-ws"));
-
     let playground = warp::get()
         .and(warp::path("playground"))
         .and(playground_filter("/graphql", Some("/subscriptions")));
@@ -72,13 +44,9 @@ pub async fn run_server(state: State) -> Result<(), error::Error> {
         .allow_any_origin()
         .build();
 
-    let log = warp::log("foo");
+    let log = warp::log("journal::graphql");
 
-    let routes = playground
-        .or(graphql)
-        .or(notifications)
-        .with(cors)
-        .with(log);
+    let routes = playground.or(graphql).with(cors).with(log);
 
     let host = state.settings.service.host;
     let port = state.settings.service.port;

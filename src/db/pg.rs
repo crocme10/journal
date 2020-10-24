@@ -97,8 +97,8 @@ impl<'c> FromRow<'c, PgRow<'c>> for DocEntity {
             image: row.get(5),
             kind: row.get(6),
             genre: row.get(7),
-            content: row.get(8),
-            updated_at: row.get(10),
+            updated_at: row.get(8),
+            content: row.get(9),
         })
     }
 }
@@ -197,15 +197,9 @@ impl Db for PgPool {
 #[async_trait]
 impl model::ProvideData for PgConnection {
     async fn get_all_documents(&mut self) -> model::ProvideResult<Vec<model::DocEntity>> {
-        let docs: Vec<DocEntity> = sqlx::query_as(
-            r#"
-SELECT *
-FROM documents
-ORDER BY updated_at
-            "#,
-        )
-        .fetch_all(self)
-        .await?;
+        let docs: Vec<DocEntity> = sqlx::query_as(r#"SELECT * FROM document_list('doc')"#)
+            .fetch_all(self)
+            .await?;
 
         let docs = docs
             .into_iter()
@@ -219,16 +213,10 @@ ORDER BY updated_at
         &mut self,
         id: model::EntityId,
     ) -> model::ProvideResult<Option<model::DocEntity>> {
-        let doc: Option<DocEntity> = sqlx::query_as(
-            r#"
-SELECT *
-FROM documents
-WHERE id = $1
-            "#,
-        )
-        .bind(id)
-        .fetch_optional(self)
-        .await?;
+        let doc: Option<DocEntity> = sqlx::query_as(r#"SELECT * FROM document_details($1)"#)
+            .bind(id)
+            .fetch_optional(self)
+            .await?;
 
         match doc {
             None => Ok(None),

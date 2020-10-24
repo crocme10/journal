@@ -1,8 +1,8 @@
 use juniper::{EmptySubscription, FieldResult, IntoFieldError, RootNode};
+use slog::info;
 use uuid::Uuid;
 
-use super::model;
-use crate::error;
+use crate::api::model;
 use crate::state::State;
 
 #[derive(Debug, Clone)]
@@ -20,6 +20,7 @@ pub struct Query;
 impl Query {
     /// Returns a list of documents
     async fn documents(&self, context: &Context) -> FieldResult<model::MultiDocsResponseBody> {
+        info!(context.state.logger, "Request for documents");
         model::list_documents(context)
             .await
             .map_err(IntoFieldError::into_field_error)
@@ -32,6 +33,7 @@ impl Query {
         id: Uuid,
         context: &Context,
     ) -> FieldResult<model::SingleDocResponseBody> {
+        info!(context.state.logger, "Request for document with id {}", id);
         model::find_document_by_id(context, id)
             .await
             .map_err(IntoFieldError::into_field_error)
@@ -49,6 +51,10 @@ impl Mutation {
         doc: model::DocumentRequestBody,
         context: &Context,
     ) -> FieldResult<model::DocumentCreationResponseBody> {
+        info!(
+            context.state.logger,
+            "Request for document update with id {}", doc.doc.id
+        );
         model::create_or_update_document(doc, context)
             .await
             .map_err(IntoFieldError::into_field_error)
