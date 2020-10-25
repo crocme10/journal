@@ -32,7 +32,7 @@ RUN groupadd $APP_USER \
     && useradd -g $APP_USER $APP_USER \
     && mkdir -p ${APP}
 
-COPY --from=builder /journal/target/release/journal ${APP}/journal
+COPY --from=builder /journal/target/release/service ${APP}/service
 COPY --from=builder /journal/docker/entrypoint.sh ${APP}/entrypoint.sh
 COPY --from=builder /journal/.env ${APP}/.env
 

@@ -8,4 +8,4 @@ done
 
 echo "PostgreSQL started"
 
-RUST_LOG=debug ./journal assets
+./service run
