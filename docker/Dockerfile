@@ -22,6 +22,7 @@ ARG APP=/usr/src/app
 
 RUN apt-get update \
     && apt-get install -y netcat \
+    && apt-get install -y libssl1.1 \
     && rm -fr /var/lib/apt/list/*
 
 ENV TZ=Etc/UTC \
@@ -33,6 +34,7 @@ RUN groupadd $APP_USER \
     && mkdir -p ${APP}
 
 COPY --from=builder /journal/target/release/service ${APP}/service
+COPY --from=builder /journal/config ${APP}/config
 COPY --from=builder /journal/docker/entrypoint.sh ${APP}/entrypoint.sh
 COPY --from=builder /journal/.env ${APP}/.env
 

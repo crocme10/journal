@@ -8,4 +8,6 @@ done
 
 echo "PostgreSQL started"
 
+echo "Hostname: "
+hostname
 ./service run
