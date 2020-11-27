@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use slog::{debug, info, o, Logger};
 use snafu::ResultExt;
 use sqlx::error::DatabaseError;
@@ -16,143 +15,78 @@ use super::model;
 use super::Db;
 use crate::error;
 
-#[derive(sqlx::Type)]
-#[sqlx(rename = "kind", rename_all = "lowercase")]
-pub enum DocKind {
-    Doc,
-    Post,
-}
-
-impl From<DocKind> for model::DocKind {
-    fn from(kind: DocKind) -> Self {
-        match kind {
-            DocKind::Doc => model::DocKind::Doc,
-            DocKind::Post => model::DocKind::Post,
-        }
-    }
-}
-
-impl From<&model::DocKind> for DocKind {
-    fn from(kind: &model::DocKind) -> Self {
-        match kind {
-            model::DocKind::Doc => DocKind::Doc,
-            model::DocKind::Post => DocKind::Post,
-        }
-    }
-}
-
-#[derive(sqlx::Type)]
-#[sqlx(rename = "genre", rename_all = "lowercase")]
-pub enum DocGenre {
-    Tutorial,
-    Howto,
-    Background,
-    Reference,
-}
-
-impl From<DocGenre> for model::DocGenre {
-    fn from(genre: DocGenre) -> Self {
-        match genre {
-            DocGenre::Tutorial => model::DocGenre::Tutorial,
-            DocGenre::Howto => model::DocGenre::Howto,
-            DocGenre::Background => model::DocGenre::Background,
-            DocGenre::Reference => model::DocGenre::Reference,
-        }
-    }
-}
-
-impl From<&model::DocGenre> for DocGenre {
-    fn from(genre: &model::DocGenre) -> Self {
-        match genre {
-            model::DocGenre::Tutorial => DocGenre::Tutorial,
-            model::DocGenre::Howto => DocGenre::Howto,
-            model::DocGenre::Background => DocGenre::Background,
-            model::DocGenre::Reference => DocGenre::Reference,
-        }
-    }
-}
-
-/// A document registered with the application (Postgres version)
-pub struct DocEntity {
-    pub id: model::EntityId,
-    pub title: String,
-    pub outline: String,
-    pub author: String,
-    pub tags: Vec<String>,
-    pub image: String,
-    pub kind: DocKind,
-    pub genre: DocGenre,
-    pub content: String,
-    pub updated_at: DateTime<Utc>,
-}
-
-impl<'c> FromRow<'c, PgRow<'c>> for DocEntity {
+// This should match the information in return_document_type
+impl<'c> FromRow<'c, PgRow<'c>> for model::DocEntity {
     fn from_row(row: &PgRow<'c>) -> Result<Self, sqlx::Error> {
-        Ok(DocEntity {
-            id: row.get(0),
-            title: row.get(1),
-            outline: row.get(2),
-            author: row.get(3),
-            tags: row.get(4),
-            image: row.get(5),
-            kind: row.get(6),
-            genre: row.get(7),
-            updated_at: row.get(8),
-            content: row.get(9),
+        let author = model::AuthorEntity {
+            id: Some(row.try_get(4)?),
+            fullname: row.try_get(5)?,
+            resource: row.try_get(6)?,
+        };
+
+        let image_author = model::AuthorEntity {
+            id: Some(row.try_get(11)?),
+            fullname: row.try_get(12)?,
+            resource: row.try_get(13)?,
+        };
+
+        let image = model::ImageEntity {
+            id: Some(row.try_get(9)?),
+            title: row.try_get(10)?,
+            author: image_author,
+            resource: row.try_get(14)?,
+        };
+
+        Ok(model::DocEntity {
+            id: row.try_get(1)?,
+            title: row.try_get(2)?,
+            outline: row.try_get(3)?,
+            author,
+            tags: row.try_get(8)?,
+            image,
+            kind: row.try_get(15)?,
+            genre: row.try_get(16)?,
+            content: row.try_get(7)?,
+            created_at: row.try_get(17)?,
+            updated_at: row.try_get(18)?,
         })
     }
 }
 
-impl From<DocEntity> for model::DocEntity {
-    fn from(pg: DocEntity) -> Self {
-        let DocEntity {
-            id,
-            title,
-            outline,
-            author,
-            tags,
-            image,
-            kind,
-            genre,
-            content,
-            updated_at,
-        } = pg;
-
-        model::DocEntity {
-            id,
-            title,
-            outline,
-            author,
-            tags,
-            image,
-            kind: model::DocKind::from(kind),
-            genre: model::DocGenre::from(genre),
-            updated_at,
-            content,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct DocCreationAck {
-    pub id: model::EntityId,
-    pub created_at: DateTime<Utc>,
-}
-
-impl<'c> FromRow<'c, PgRow<'c>> for DocCreationAck {
+// This should match the information in return_document_type
+impl<'c> FromRow<'c, PgRow<'c>> for model::ShortDocEntity {
     fn from_row(row: &PgRow<'c>) -> Result<Self, sqlx::Error> {
-        Ok(DocCreationAck {
-            id: row.get(0),
-            created_at: row.get(1),
+        let author = model::AuthorEntity {
+            id: Some(row.try_get(3)?),
+            fullname: row.try_get(4)?,
+            resource: row.try_get(5)?,
+        };
+
+        let image_author = model::AuthorEntity {
+            id: Some(row.try_get(9)?),
+            fullname: row.try_get(10)?,
+            resource: row.try_get(11)?,
+        };
+
+        let image = model::ImageEntity {
+            id: Some(row.try_get(7)?),
+            title: row.try_get(8)?,
+            author: image_author,
+            resource: row.try_get(12)?,
+        };
+
+        Ok(model::ShortDocEntity {
+            id: row.try_get(0)?,
+            title: row.try_get(1)?,
+            outline: row.try_get(2)?,
+            author,
+            tags: row.try_get(6)?,
+            image,
+            kind: row.try_get(13)?,
+            genre: row.try_get(14)?,
+            created_at: row.try_get(15)?,
+            updated_at: row.try_get(16)?,
         })
-    }
-}
-
-impl From<DocCreationAck> for model::DocCreationAck {
-    fn from(pg: DocCreationAck) -> Self {
-        let DocCreationAck { id, created_at } = pg;
-
-        model::DocCreationAck { id, created_at }
     }
 }
 
@@ -195,16 +129,12 @@ impl Db for PgPool {
 }
 
 #[async_trait]
-impl model::ProvideData for PgConnection {
-    async fn get_all_documents(&mut self) -> model::ProvideResult<Vec<model::DocEntity>> {
-        let docs: Vec<DocEntity> = sqlx::query_as(r#"SELECT * FROM document_list('doc')"#)
-            .fetch_all(self)
-            .await?;
-
-        let docs = docs
-            .into_iter()
-            .map(model::DocEntity::from)
-            .collect::<Vec<_>>();
+impl model::ProvideJournal for PgConnection {
+    async fn get_all_documents(&mut self) -> model::ProvideResult<Vec<model::ShortDocEntity>> {
+        let docs: Vec<model::ShortDocEntity> =
+            sqlx::query_as(r#"SELECT * FROM main.list_documents('doc')"#)
+                .fetch_all(self)
+                .await?;
 
         Ok(docs)
     }
@@ -213,44 +143,68 @@ impl model::ProvideData for PgConnection {
         &mut self,
         id: model::EntityId,
     ) -> model::ProvideResult<Option<model::DocEntity>> {
-        let doc: Option<DocEntity> = sqlx::query_as(r#"SELECT * FROM document_details($1)"#)
-            .bind(id)
-            .fetch_optional(self)
-            .await?;
+        let doc: Option<model::DocEntity> =
+            sqlx::query_as(r#"SELECT * FROM main.get_document_by_id($1)"#)
+                .bind(id)
+                .fetch_optional(self)
+                .await?;
 
-        match doc {
-            None => Ok(None),
-            Some(doc) => {
-                let doc = model::DocEntity::from(doc);
-                Ok(Some(doc))
-            }
-        }
+        Ok(doc)
     }
 
     async fn create_or_update_document(
         &mut self,
         doc: &model::DocEntity,
-    ) -> model::ProvideResult<model::DocCreationAck> {
-        let kind = DocKind::from(&doc.kind);
-        let genre = DocGenre::from(&doc.genre);
-        let resp: DocCreationAck = sqlx::query_as(
-            "SELECT _id::UUID, _created_at::TIMESTAMPTZ FROM create_document_with_id(
+    ) -> model::ProvideResult<model::DocEntity> {
+        let resp: model::DocEntity = sqlx::query_as(
+            "SELECT * FROM main.create_document_with_id(
             $1::UUID, $2::TEXT, $3::TEXT, $4::TEXT, $5::TEXT,
-            $6::TEXT[], $7::TEXT, $8::KIND, $9::GENRE)",
+            $5::TEXT, $6::TEXT, $7::TEXT[], $8::TEXT, $9::TEXT,
+            $10::TEXT, $11::TEXT, $12::KIND, $13::GENRE)",
         )
         .bind(&doc.id)
         .bind(&doc.title)
         .bind(&doc.outline)
-        .bind(&doc.author)
+        .bind(&doc.author.fullname)
+        .bind(&doc.author.resource)
         .bind(&doc.content)
         .bind(&doc.tags)
-        .bind(&doc.image)
-        .bind(&kind)
-        .bind(&genre)
+        .bind(&doc.image.title)
+        .bind(&doc.image.author.fullname)
+        .bind(&doc.image.author.resource)
+        .bind(&doc.image.resource)
+        .bind(&doc.kind)
+        .bind(&doc.genre)
         .fetch_one(self)
         .await?;
 
-        Ok(model::DocCreationAck::from(resp))
+        Ok(resp)
+    }
+
+    async fn get_all_documents_by_query(
+        &mut self,
+        query: &str,
+    ) -> model::ProvideResult<Vec<model::ShortDocEntity>> {
+        let docs: Vec<model::ShortDocEntity> =
+            sqlx::query_as(r#"SELECT * FROM main.search_documents_by_query($1)"#)
+                .bind(query)
+                .fetch_all(self)
+                .await?;
+
+        Ok(docs)
+    }
+
+    async fn get_all_documents_by_tag(
+        &mut self,
+        tag: &str,
+    ) -> model::ProvideResult<Vec<model::ShortDocEntity>> {
+        let docs: Vec<model::ShortDocEntity> =
+            sqlx::query_as(r#"SELECT * FROM main.search_documents_by_tag($1)"#)
+                .bind(tag)
+                .fetch_all(self)
+                .await?;
+
+        Ok(docs)
     }
 }
 

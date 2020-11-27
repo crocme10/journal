@@ -3,6 +3,12 @@ name = "journal"
 version = "0.2.0"
 authors = ["crocme10 <matt@area403.org>"]
 edition = "2018"
+description = "GraphQL API for documents database"
+license = "AGPLv3"
+readme = "README.md"
+repository = "https://github.com/crome10/journal.git"
+keywords = [ "graphql", "document" ]
+categories = [ "application" ]
 
 [dependencies]
 async-trait = "0.1.36"

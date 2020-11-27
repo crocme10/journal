@@ -6,13 +6,15 @@ use uuid::Uuid;
 
 pub type EntityId = Uuid;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, sqlx::Type)]
+#[sqlx(rename = "kind", rename_all = "lowercase")]
 pub enum DocKind {
     Doc,
     Post,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, sqlx::Type)]
+#[sqlx(rename = "genre", rename_all = "lowercase")]
 pub enum DocGenre {
     Tutorial,
     Howto,
@@ -20,36 +22,64 @@ pub enum DocGenre {
     Reference,
 }
 
-/// A document stored in the database
-#[derive(Debug, Clone)]
+#[derive(Debug)]
+pub struct AuthorEntity {
+    pub id: Option<EntityId>,
+    pub fullname: String,
+    pub resource: String,
+}
+
+#[derive(Debug)]
+pub struct ImageEntity {
+    pub id: Option<EntityId>,
+    pub title: String,
+    pub author: AuthorEntity,
+    pub resource: String,
+}
+
+#[derive(Debug)]
+pub struct ShortDocEntity {
+    pub id: EntityId,
+    pub title: String,
+    pub outline: String,
+    pub author: AuthorEntity,
+    pub tags: Vec<String>,
+    pub image: ImageEntity,
+    pub kind: DocKind,
+    pub genre: DocGenre,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug)]
 pub struct DocEntity {
     pub id: EntityId,
     pub title: String,
     pub outline: String,
-    pub author: String,
+    pub author: AuthorEntity,
     pub tags: Vec<String>,
-    pub image: String,
+    pub image: ImageEntity,
     pub kind: DocKind,
     pub genre: DocGenre,
     pub content: String,
+    pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone)]
-pub struct DocCreationAck {
-    pub id: EntityId,
-    pub created_at: DateTime<Utc>,
-}
-
-// From sqlx realworld example
 #[async_trait]
-pub trait ProvideData {
-    async fn get_all_documents(&mut self) -> ProvideResult<Vec<DocEntity>>;
+pub trait ProvideJournal {
+    async fn get_all_documents(&mut self) -> ProvideResult<Vec<ShortDocEntity>>;
 
     async fn get_document_by_id(&mut self, id: EntityId) -> ProvideResult<Option<DocEntity>>;
 
-    async fn create_or_update_document(&mut self, doc: &DocEntity)
-        -> ProvideResult<DocCreationAck>;
+    async fn create_or_update_document(&mut self, doc: &DocEntity) -> ProvideResult<DocEntity>;
+
+    async fn get_all_documents_by_query(
+        &mut self,
+        query: &str,
+    ) -> ProvideResult<Vec<ShortDocEntity>>;
+
+    async fn get_all_documents_by_tag(&mut self, tag: &str) -> ProvideResult<Vec<ShortDocEntity>>;
 }
 
 pub type ProvideResult<T> = Result<T, ProvideError>;

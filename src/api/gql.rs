@@ -19,12 +19,11 @@ pub struct Query;
 )]
 impl Query {
     /// Returns a list of documents
-    async fn documents(&self, context: &Context) -> FieldResult<model::MultiDocsResponseBody> {
+    async fn list_documents(&self, context: &Context) -> FieldResult<model::MultiDocsResponseBody> {
         info!(context.state.logger, "Request for documents");
         model::list_documents(context)
             .await
             .map_err(IntoFieldError::into_field_error)
-            .into()
     }
 
     /// Find a document by its id
@@ -35,6 +34,36 @@ impl Query {
     ) -> FieldResult<model::SingleDocResponseBody> {
         info!(context.state.logger, "Request for document with id {}", id);
         model::find_document_by_id(context, id)
+            .await
+            .map_err(IntoFieldError::into_field_error)
+    }
+
+    /// Returns a list of documents using full text search.
+    async fn list_documents_by_query(
+        &self,
+        query: String,
+        context: &Context,
+    ) -> FieldResult<model::MultiDocsResponseBody> {
+        info!(
+            context.state.logger,
+            "Request for documents search using query {}", query
+        );
+        model::list_documents_by_query(context, query.as_str())
+            .await
+            .map_err(IntoFieldError::into_field_error)
+    }
+
+    /// Returns a list of documents using full text search.
+    async fn list_documents_by_tag(
+        &self,
+        tag: String,
+        context: &Context,
+    ) -> FieldResult<model::MultiDocsResponseBody> {
+        info!(
+            context.state.logger,
+            "Request for documents search using tag {}", tag
+        );
+        model::list_documents_by_tag(context, tag.as_str())
             .await
             .map_err(IntoFieldError::into_field_error)
     }
@@ -50,7 +79,7 @@ impl Mutation {
         &self,
         doc: model::DocumentRequestBody,
         context: &Context,
-    ) -> FieldResult<model::DocumentCreationResponseBody> {
+    ) -> FieldResult<model::SingleDocResponseBody> {
         info!(
             context.state.logger,
             "Request for document update with id {}", doc.doc.id
