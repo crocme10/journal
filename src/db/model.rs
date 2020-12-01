@@ -68,7 +68,7 @@ pub struct DocEntity {
 
 #[async_trait]
 pub trait ProvideJournal {
-    async fn get_all_documents(&mut self) -> ProvideResult<Vec<ShortDocEntity>>;
+    async fn get_all_documents(&mut self, kind: DocKind) -> ProvideResult<Vec<ShortDocEntity>>;
 
     async fn get_document_by_id(&mut self, id: EntityId) -> ProvideResult<Option<DocEntity>>;
 

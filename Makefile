@@ -42,6 +42,7 @@ SHELL=/bin/bash
 
 build: pre-build docker-build post-build
 
+check: pre-build ## Runs several tests (alias for pre-build)
 pre-build: fmt lint test
 
 post-build:
@@ -51,6 +52,7 @@ pre-push:
 post-push:
 
 docker-build:
+	$(info $$DOCKER_TAGS is [${DOCKER_TAGS}])
 	@for ENV in $(BUILD_ENV); do \
 		TAGS=""; \
 		SPL=$${ENV/:/ }; \
@@ -94,22 +96,34 @@ do-push:
 
 snapshot: build push
 
-tag-patch-release: VERSION := $(shell . $(RELEASE_SUPPORT); nextPatchLevel)
-tag-patch-release: changelog tag
+tag-new-release: VERSION := $(shell . $(RELEASE_SUPPORT); nextRelease)
+tag-new-release: changelog tag
 
-tag-minor-release: VERSION := $(shell . $(RELEASE_SUPPORT); nextMinorLevel)
-tag-minor-release: changelog tag
+tag-new-prerelease: VERSION := $(shell . $(RELEASE_SUPPORT); nextPrerelease)
+tag-new-prerelease: tag
 
-tag-major-release: VERSION := $(shell . $(RELEASE_SUPPORT); nextMajorLevel)
-tag-major-release: changelog tag
+tag-patch-prerelease: VERSION := $(shell . $(RELEASE_SUPPORT); nextPatchPrerelease)
+tag-patch-prerelease: tag
 
-patch-release: tag-patch-release release ## Increment the patch version number and release
+tag-minor-prerelease: VERSION := $(shell . $(RELEASE_SUPPORT); nextMinorPrerelease)
+tag-minor-prerelease: tag
+
+tag-major-prerelease: VERSION := $(shell . $(RELEASE_SUPPORT); nextMajorPrerelease)
+tag-major-prerelease: tag
+
+new-release: tag-new-release release ## Drop the prerelease suffix and release
 	@echo $(VERSION)
 
-minor-release: tag-minor-release release ## Increment the minor version number and release
+new-prerelease: tag-new-prerelease release ## Increment the prerelease count and release
 	@echo $(VERSION)
 
-major-release: tag-major-release release ## Increment the major version number and release
+patch-prerelease: tag-patch-prerelease release ## Increment the patch version number and release
+	@echo $(VERSION)
+
+minor-prerelease: tag-minor-prerelease release ## Increment the minor version number and release
+	@echo $(VERSION)
+
+major-prerelease: tag-major-prerelease release ## Increment the major version number and release
 	@echo $(VERSION)
 
 tag: TAG=$(shell . $(RELEASE_SUPPORT); getTag $(VERSION))
@@ -129,7 +143,10 @@ check-status: ## Check that there are no outstanding changes. (uses git status)
 		|| (echo "Status ERROR: there are outstanding changes" >&2 && exit 1) \
 		&& (echo "Status OK" >&2 ) ;
 
+check-release: TAG=$(shell . $(RELEASE_SUPPORT); getTag $(VERSION))
 check-release: ## Check that the current git tag matches the one in Cargo.toml and there are no outstanding changes.
+	$(info $$VERSION is [${VERSION}])
+	$(info $$TAG is [${TAG}])
 	@. $(RELEASE_SUPPORT) ; tagExists $(TAG) || (echo "ERROR: version not yet tagged in git. make [minor,major,patch]-release." >&2 && exit 1) ;
 	@. $(RELEASE_SUPPORT) ; ! differsFromRelease $(TAG) || (echo "ERROR: current directory differs from tagged $(TAG). make [minor,major,patch]-release." ; exit 1)
 

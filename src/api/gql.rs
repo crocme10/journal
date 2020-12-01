@@ -21,7 +21,15 @@ impl Query {
     /// Returns a list of documents
     async fn list_documents(&self, context: &Context) -> FieldResult<model::MultiDocsResponseBody> {
         info!(context.state.logger, "Request for documents");
-        model::list_documents(context)
+        model::list_documents(context, model::DocKind::Doc)
+            .await
+            .map_err(IntoFieldError::into_field_error)
+    }
+
+    /// Returns a list of posts
+    async fn list_posts(&self, context: &Context) -> FieldResult<model::MultiDocsResponseBody> {
+        info!(context.state.logger, "Request for posts");
+        model::list_documents(context, model::DocKind::Post)
             .await
             .map_err(IntoFieldError::into_field_error)
     }

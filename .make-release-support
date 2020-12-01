@@ -1,23 +1,26 @@
-#!/bin/bash
-#
-#   Copyright 2015  Xebia Nederland B.V.
-#
-#   Licensed under the Apache License, Version 2.0 (the "License");
-#   you may not use this file except in compliance with the License.
-#   You may obtain a copy of the License at
-#
-#       http://www.apache.org/licenses/LICENSE-2.0
-#
-#   Unless required by applicable law or agreed to in writing, software
-#   distributed under the License is distributed on an "AS IS" BASIS,
-#   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#   See the License for the specific language governing permissions and
-#   limitations under the License.
-#
-readonly SCRIPT_SRC="$(dirname "${BASH_SOURCE[${#BASH_SOURCE[@]} - 1]}")"
-readonly SCRIPT_DIR="$(cd "${SCRIPT_SRC}" >/dev/null 2>&1 && pwd)"
-readonly BASE_NAME="$(basename ${SCRIPT_DIR})"
-readonly SCRIPT_NAME=$(basename "$0")
+#!/usr/bin/env bash
+
+# Copyright 2015  Xebia Nederland B.V.
+# Copyright (c) 2014-2015 François Saint-Jacques <fsaintjacques@gmail.com>
+# for semver regex (https://github.com/fsaintjacques/semver-tool)
+
+SCRIPT_SRC="$(dirname "${BASH_SOURCE[${#BASH_SOURCE[@]} - 1]}")"
+SCRIPT_DIR="$(cd "${SCRIPT_SRC}" >/dev/null 2>&1 && pwd)"
+BASE_NAME="$(basename ${SCRIPT_DIR})"
+
+# Some constants for SEMVER regexp
+NAT='0|[1-9][0-9]*'
+ALPHANUM='[0-9]*[A-Za-z-][0-9A-Za-z-]*'
+IDENT="$NAT|$ALPHANUM"
+FIELD='[0-9A-Za-z-]+'
+
+SEMVER_REGEX="\
+^[vV]?\
+($NAT)\\.($NAT)\\.($NAT)\
+(\\-(${IDENT})(\\.(${IDENT}))*)?\
+(\\+${FIELD}(\\.${FIELD})*)?$"
+
+PRERELEASE_REGEX="^\\-rc(${NAT})$"
 
 # Uses git status in short format to see if there are outstanding files that
 # have not been commited
@@ -28,7 +31,10 @@ function hasChanges() {
 # This returns the version contained in Cargo.tom l
 function getRelease() {
 	# awk -F= '/^release=/{print $2}' .release
-  cat Cargo.toml | grep '^version' | grep '\([0-9]\+\.\?\)\{3\}' -o
+  # cat Cargo.toml | grep '^version' | grep '\([0-9]\+\.\?\)\{3\}' -o
+  local rel=$(cat Cargo.toml | grep '^version' | cut -d '=' -f 2 | tr -d \")
+  rel="${rel#"${rel%%[![:space:]]*}"}"   # remove leading whitespace characters
+  echo "$rel"
 }
 
 # The tag can have suffixes, like the commit for when the directory is not equal to
@@ -54,27 +60,34 @@ function getTag() {
 }
 
 function getLastTag() {
-  # We use abbre with <n> = 0, which will suppress long format,
-  # only showing the closest tag.
-  git describe --tags --abbrev=0
+  # We get the last tag that is not a prerelease (ie does not contain rc)
+  git tag -l --sort=version:refname v* | grep -v rc | tail -n 1
 }
 
-# This function returns an array of strings,
-# So, if the version returned by getRelease is 1.2.3, it
-# returns "1 1.2 1.2.3"
+# This function returns the tag(s) for use with Docker.
+# If the version (from getRelease) is a prerelease (finishes with rcN),
+# then we only return this value.
+# If the versios is a release (X.Y.Z), then we return an array of strings,
+# X X.Y X.Y.Z
 function getDockerTags() {
 	local ORIGINAL=$(getRelease)
-  local SEMVER=( ${ORIGINAL//./ } )
-  local MAJOR="${SEMVER[0]}"
-  local MINOR="${SEMVER[1]}"
-  local PATCH="${SEMVER[2]}"
-
-  local VERSION="${MAJOR}.${MINOR}.${PATCH}"
-  echo "${MAJOR} ${MAJOR}.${MINOR} ${MAJOR}.${MINOR}.${PATCH}"
+  if [[ "$ORIGINAL" =~ $SEMVER_REGEX ]]; then
+    local MAJOR=${BASH_REMATCH[1]}
+    local MINOR=${BASH_REMATCH[2]}
+    local PATCH=${BASH_REMATCH[3]}
+    local PRERE=${BASH_REMATCH[4]}
+    if [ -n "$PRERE" ]; then
+      echo "$ORIGINAL"
+    else
+      echo "${MAJOR} ${MAJOR}.${MINOR} ${MAJOR}.${MINOR}.${PATCH}"
+    fi
+  else
+    echo "$ORIGINAL"
+  fi
 }
 
 # Updates the version in Cargo.toml
-# $1 Version (must match major.minor.patch)
+# $1 Version (must match semver)
 function setRelease() {
   local VERSION="$1"
   echo "Setting the new release to ${VERSION}"
@@ -84,40 +97,12 @@ function setRelease() {
   [[ -z "${VERSION}" && "${VERSION+xxx}" = "xxx" ]] &&
     { echo "The variable \$VERSION is set but empty. Make sure it is not empty before using setRelease."; return 1; }
 
-  checkSemanticVersion ${VERSION}
+  validate_version ${VERSION}
   [[ $? != 0 ]] &&
     { echo "${VERSION} is not valid semantic version"; return 1; } ||
     { sed -i -e "s/^version\s*=\s*\".*\"/version = \"$VERSION\"/" Cargo.toml; }
 
   return 0
-}
-
-# Returns 0 if the version has the form major.minor.patch
-# $1 Version
-# This function works by decomposing the version into its
-# parts (major, minor, patch), ensuring they're not empty,
-# reassemble them into a candidate version,
-# and verify that the original version is the same as the candidate.
-function checkSemanticVersion() {
-  local ORIGINAL="$1"
-	# Check that ORIGINAL is set and non-empty
-  [[ -z "${ORIGINAL+xxx}" ]] &&
-    { echo "The variable \$ORIGINAL is not set. Make sure it is set before using checkSemanticVersion."; return 1; }
-  [[ -z "${ORIGINAL}" && "${ORIGINAL+xxx}" = "xxx" ]] &&
-    { echo "The variable \$ORIGINAL is set but empty. Make sure it is not empty before using checkSemanticVersion."; return 1; }
-
-  local SEMVER=( ${ORIGINAL//./ } )
-  local MAJOR="${SEMVER[0]}"
-  [[ -z "${MAJOR}" && "${MAJOR+xxx}" = "xxx" ]] &&
-    { echo "The variable \$MAJOR is empty."; return 1; }
-  local MINOR="${SEMVER[1]}"
-  [[ -z "${MINOR}" && "${MINOR+xxx}" = "xxx" ]] &&
-    { echo "The variable \$MINOR is empty."; return 1; }
-  local PATCH="${SEMVER[2]}"
-  [[ -z "${PATCH}" && "${PATCH+xxx}" = "xxx" ]] &&
-    { echo "The variable \$PATCH is empty."; return 1; }
-  local VERSION="${MAJOR}.${MINOR}.${PATCH}"
-  [[ ${VERSION} == ${ORIGINAL} ]] && { return 0; } || { return 0; }
 }
 
 # Not used
@@ -161,39 +146,124 @@ function getVersion() {
   echo "${result}"
 }
 
-# Returns the nextPatchLevel.
-# It reads the current version from Cargo.toml using the getRelease function
-# FIXME We need to return both the incremented version, and also an error if
-# the original version is not a semantic version.
-function nextPatchLevel() {
-	local ORIGINAL=$(getRelease)
-  local SEMVER=( ${ORIGINAL//./ } )
-  local MAJOR="${SEMVER[0]}"
-  local MINOR="${SEMVER[1]}"
-  local PATCH="${SEMVER[2]}"
-  PATCH=$(($PATCH + 1))
-  local VERSION="${MAJOR}.${MINOR}.${PATCH}"
-  echo "${VERSION}"
+# $1 version
+# $2 variable to set
+# Returns 0 and set $2 if $1 follows semver, returns 1 otherwise
+function validate_version() {
+  local version=$1
+  [[ "$version" =~ $SEMVER_REGEX ]] && { return 0; } || { return 1; }
 }
 
-function nextMinorLevel() {
-	local ORIGINAL=$(getRelease)
-  local SEMVER=( ${ORIGINAL//./ } )
-  local MAJOR="${SEMVER[0]}"
-  local MINOR="${SEMVER[1]}"
-  MINOR=$(($MINOR + 1))
-  local VERSION="${MAJOR}.${MINOR}.0"
-  echo "${VERSION}"
+# $1 version
+# $2 variable to set
+# Returns 0 and set $2 if $1 follows semver, returns 1 otherwise
+function decompose_version() {
+  if [ "$#" -ne "2" ]; then
+    echo "You must supply 2 arguments"
+    return 1
+  fi
+  local version=$1
+  if [[ "$version" =~ $SEMVER_REGEX ]]; then
+    local major=${BASH_REMATCH[1]}
+    local minor=${BASH_REMATCH[2]}
+    local patch=${BASH_REMATCH[3]}
+    local prere=${BASH_REMATCH[4]}
+    local build=${BASH_REMATCH[8]}
+    eval "$2=(\"$major\" \"$minor\" \"$patch\" \"$prere\" \"$build\")"
+    return 0
+  else
+    return 1
+  fi
 }
 
-function nextMajorLevel() {
-	local ORIGINAL=$(getRelease)
-  local SEMVER=( ${ORIGINAL//./ } )
-  local MAJOR="${SEMVER[0]}"
-  MAJOR=$(($MAJOR + 1))
-  local VERSION="${MAJOR}.0.0"
-  echo "${VERSION}"
+function validate_prerelease() {
+  if [ "$#" -ne "2" ]; then
+    echo "You must supply 2 arguments"
+    return 1
+  fi
+  local prerelease=$1
+  if [[ "$prerelease" =~ $PRERELEASE_REGEX ]]; then
+    local iter=${BASH_REMATCH[1]}
+    eval "$2=$iter"
+    return 0
+  else
+    echo "prerelease $prerelease does not match the expected scheme '-rcN'. See help for more information."
+    return 1
+  fi
 }
+
+function nextMajorPrerelease() {
+	local ORIGINAL=$(getRelease)
+  decompose_version "$ORIGINAL" SEMVER
+  if [ $? -eq 0 ]; then
+    local MAJOR="${SEMVER[0]}"
+    MAJOR=$(($MAJOR + 1))
+    local VERSION="${MAJOR}.0.0-rc0"
+    echo "${VERSION}"
+  else
+    echo "${ORIGINAL}"
+  fi
+}
+
+function nextMinorPrerelease() {
+	local ORIGINAL=$(getRelease)
+  decompose_version "$ORIGINAL" SEMVER
+  if [ $? -eq 0 ]; then
+    local MAJOR="${SEMVER[0]}"
+    local MINOR="${SEMVER[1]}"
+    MINOR=$(($MINOR + 1))
+    local VERSION="${MAJOR}.${MINOR}.0-rc0"
+    echo "${VERSION}"
+  else
+    echo "${ORIGINAL}"
+  fi
+}
+
+function nextPatchPrerelease() {
+	local ORIGINAL=$(getRelease)
+  decompose_version "$ORIGINAL" SEMVER
+  if [ $? -eq 0 ]; then
+    local MAJOR="${SEMVER[0]}"
+    local MINOR="${SEMVER[1]}"
+    local PATCH="${SEMVER[2]}"
+    PATCH=$(($PATCH + 1))
+    local VERSION="${MAJOR}.${MINOR}.${PATCH}-rc0"
+    echo "${VERSION}"
+  else
+    echo "${ORIGINAL}"
+  fi
+}
+
+function nextPrerelease() {
+	local ORIGINAL=$(getRelease)
+  decompose_version "$ORIGINAL" SEMVER
+  if [ $? -eq 0 ]; then
+    local MAJOR="${SEMVER[0]}"
+    local MINOR="${SEMVER[1]}"
+    local PATCH="${SEMVER[2]}"
+    local PRERE="${SEMVER[3]}"
+    validate_prerelease "$PRERE" i
+    local VERSION="$MAJOR.$MINOR.$PATCH-rc$((i + 1))"
+    echo "${VERSION}"
+  else
+    echo "${ORIGINAL}"
+  fi
+}
+
+function nextRelease() {
+	local ORIGINAL=$(getRelease)
+  decompose_version "$ORIGINAL" SEMVER
+  if [ $? -eq 0 ]; then
+    local MAJOR="${SEMVER[0]}"
+    local MINOR="${SEMVER[1]}"
+    local PATCH="${SEMVER[2]}"
+    local VERSION="$MAJOR.$MINOR.$PATCH"
+    echo "${VERSION}"
+  else
+    echo "${ORIGINAL}"
+  fi
+}
+
 
 # $1 tag.
 # We will returning the changelog from last tag till HEAD
@@ -232,23 +302,26 @@ function splitLog() {
   # and for each commit type, we iterate through the list of hashes.
   # For each hash, we use git show to display the information
   for commit_type in ${!assoc[@]}; do
-    local commits="${assoc["$commit_type"]}"
-    delimiter="--"
-    conCatString=$commits$delimiter
-    splitMultiChar=()
-    while [[ $conCatString ]]; do
-      splitMultiChar+=( "${conCatString%%"$delimiter"*}" )
-      conCatString=${conCatString#*"$delimiter"}
-    done
-    echo "### ${commit_type}:" >> /tmp/changelog.md
-    for commit in "${splitMultiChar[@]}"; do
-      local change=$(git show -s --pretty='format:%s, %an, %as, %h' ${commit})
-      # We remove the [xxx] because its redundant with the section
-      # this syntax means keep everything after first space
-      change="${change#* }"
-      echo "- ${change}" >> /tmp/changelog.md
-    done
-    echo "\n" >> /tmp/changelog.md
+    # We don't want to list all the Version related commits... so skip them.
+    if [ "$commit_type" != "VER" ]; then
+      local commits="${assoc["$commit_type"]}"
+      delimiter="--"
+      conCatString=$commits$delimiter
+      splitMultiChar=()
+      while [[ $conCatString ]]; do
+        splitMultiChar+=( "${conCatString%%"$delimiter"*}" )
+        conCatString=${conCatString#*"$delimiter"}
+      done
+      echo "### ${commit_type}:" >> /tmp/changelog.md
+      for commit in "${splitMultiChar[@]}"; do
+        local change=$(git show -s --pretty='format:%s, %an, %as, %h' ${commit})
+        # We remove the [xxx] because its redundant with the section
+        # this syntax means keep everything after first space
+        change="${change#* }"
+        echo "- ${change}" >> /tmp/changelog.md
+      done
+      echo "\n" >> /tmp/changelog.md
+    fi
   done
 }
 
@@ -257,9 +330,9 @@ function splitLog() {
 function generateChangelog() {
   # FIXME Use temp file instead
   rm -f /tmp/changelog.md
-  local day="$(date +%Y-%m-%d)"
-  local title="## [$1] $day"
-  echo "$title" >> /tmp/changelog.md
+  local day="$(date +%Y-%m-%dT%H:%M:%SZ)"
+  echo "## $1\n" >> /tmp/changelog.md
+  echo "Released $day\n">> /tmp/changelog.md
   echo "" >> /tmp/changelog.md
 
   local log=$(changeLog $2)
@@ -270,7 +343,6 @@ function generateChangelog() {
   # In the following line, the +11 matches the height of the header.
   tail -n +11 CHANGELOG.md > /tmp/old-changelog.md
   cat /tmp/changelog.md /tmp/old-changelog.md > CHANGELOG.md
-  echo "done changelog"
   addChangelogHeader
 }
 
@@ -289,3 +361,4 @@ EOF
 
   echo -e "${header}\n\n\n$(cat CHANGELOG.md)" > CHANGELOG.md
 }
+

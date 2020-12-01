@@ -2,6 +2,7 @@ use clap::ArgMatches;
 use config::{Config, Environment, File};
 use serde::Deserialize;
 use snafu::ResultExt;
+use std::convert::TryFrom;
 use std::env;
 
 use super::error;
@@ -73,6 +74,29 @@ impl Settings {
 
         s.set("database.url", db_url).context(error::ConfigError {
             msg: String::from("Could not set database url from environment variable"),
+        })?;
+
+        // For the port, the value by default is the one in the configuration file. But it
+        // gets overwritten by the environment variable JOURNAL_GRAPHQL_PORT.
+        let default_port = s.get_int("service.port").context(error::ConfigError {
+            msg: String::from("Could not get default port"),
+        })?;
+        // config crate support i64, not u16
+        let default_port = u16::try_from(default_port).map_err(|err| error::Error::MiscError {
+            msg: format!("Could not get u16 port ({})", err),
+        })?;
+        let port = env::var("JOURNAL_GRAPHQL_PORT").unwrap_or_else(|_| format!("{}", default_port));
+
+        let port = port.parse::<u16>().map_err(|err| error::Error::MiscError {
+            msg: format!("Could not parse into a valid port number ({})", err),
+        })?;
+
+        s.set(
+            "service.port",
+            i64::try_from(port).expect("could not convert port to i64"),
+        )
+        .context(error::ConfigError {
+            msg: String::from("Could not set service port"),
         })?;
 
         let m = matches.into();

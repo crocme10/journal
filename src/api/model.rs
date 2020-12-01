@@ -330,7 +330,10 @@ pub struct DocumentRequestBody {
 }
 
 /// Retrieve all documents
-pub async fn list_documents(context: &Context) -> Result<MultiDocsResponseBody, error::Error> {
+pub async fn list_documents(
+    context: &Context,
+    kind: DocKind,
+) -> Result<MultiDocsResponseBody, error::Error> {
     async move {
         let pool = &context.state.pool;
 
@@ -343,7 +346,7 @@ pub async fn list_documents(context: &Context) -> Result<MultiDocsResponseBody, 
             })?;
 
         let entities = tx
-            .get_all_documents()
+            .get_all_documents(db::DocKind::from(kind))
             .await
             .context(error::DBProvideError {
                 msg: "Could not get all them documents",

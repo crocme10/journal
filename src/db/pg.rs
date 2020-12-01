@@ -19,36 +19,36 @@ use crate::error;
 impl<'c> FromRow<'c, PgRow<'c>> for model::DocEntity {
     fn from_row(row: &PgRow<'c>) -> Result<Self, sqlx::Error> {
         let author = model::AuthorEntity {
-            id: Some(row.try_get(4)?),
-            fullname: row.try_get(5)?,
-            resource: row.try_get(6)?,
+            id: Some(row.try_get(3)?),
+            fullname: row.try_get(4)?,
+            resource: row.try_get(5)?,
         };
 
         let image_author = model::AuthorEntity {
-            id: Some(row.try_get(11)?),
-            fullname: row.try_get(12)?,
-            resource: row.try_get(13)?,
+            id: Some(row.try_get(10)?),
+            fullname: row.try_get(11)?,
+            resource: row.try_get(12)?,
         };
 
         let image = model::ImageEntity {
-            id: Some(row.try_get(9)?),
-            title: row.try_get(10)?,
+            id: Some(row.try_get(8)?),
+            title: row.try_get(9)?,
             author: image_author,
-            resource: row.try_get(14)?,
+            resource: row.try_get(13)?,
         };
 
         Ok(model::DocEntity {
-            id: row.try_get(1)?,
-            title: row.try_get(2)?,
-            outline: row.try_get(3)?,
+            id: row.try_get(0)?,
+            title: row.try_get(1)?,
+            outline: row.try_get(2)?,
             author,
-            tags: row.try_get(8)?,
+            tags: row.try_get(7)?,
             image,
-            kind: row.try_get(15)?,
-            genre: row.try_get(16)?,
-            content: row.try_get(7)?,
-            created_at: row.try_get(17)?,
-            updated_at: row.try_get(18)?,
+            kind: row.try_get(14)?,
+            genre: row.try_get(15)?,
+            content: row.try_get(6)?,
+            created_at: row.try_get(16)?,
+            updated_at: row.try_get(17)?,
         })
     }
 }
@@ -130,9 +130,13 @@ impl Db for PgPool {
 
 #[async_trait]
 impl model::ProvideJournal for PgConnection {
-    async fn get_all_documents(&mut self) -> model::ProvideResult<Vec<model::ShortDocEntity>> {
+    async fn get_all_documents(
+        &mut self,
+        kind: model::DocKind,
+    ) -> model::ProvideResult<Vec<model::ShortDocEntity>> {
         let docs: Vec<model::ShortDocEntity> =
-            sqlx::query_as(r#"SELECT * FROM main.list_documents('doc')"#)
+            sqlx::query_as(r#"SELECT * FROM main.list_documents($1)"#)
+                .bind(kind)
                 .fetch_all(self)
                 .await?;
 
@@ -159,8 +163,8 @@ impl model::ProvideJournal for PgConnection {
         let resp: model::DocEntity = sqlx::query_as(
             "SELECT * FROM main.create_document_with_id(
             $1::UUID, $2::TEXT, $3::TEXT, $4::TEXT, $5::TEXT,
-            $5::TEXT, $6::TEXT, $7::TEXT[], $8::TEXT, $9::TEXT,
-            $10::TEXT, $11::TEXT, $12::KIND, $13::GENRE)",
+            $6::TEXT, $7::TEXT[], $8::TEXT, $9::TEXT,
+            $10::TEXT, $11::TEXT, $12::MAIN.KIND, $13::MAIN.GENRE)",
         )
         .bind(&doc.id)
         .bind(&doc.title)
