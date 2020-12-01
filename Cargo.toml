@@ -1,6 +1,6 @@
 [package]
 name = "journal"
-version = "0.2.0"
+version = "0.3.0-rc0"
 authors = ["crocme10 <matt@area403.org>"]
 edition = "2018"
 description = "GraphQL API for documents database"
